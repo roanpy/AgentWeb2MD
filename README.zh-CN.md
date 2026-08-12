@@ -9,7 +9,6 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)
 ![Workflow](https://img.shields.io/badge/workflow-agent--guided-8a63d2.svg)
 ![Output](https://img.shields.io/badge/output-Markdown-1f6feb.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-555.svg)
 
 AgentWeb2MD 将 Agent 的判断能力与确定性的提取引擎结合起来。Agent 负责确定范围、审查站点配置、检查小样、阅读质量报告并持续迭代，然后才执行完整提取。
 

@@ -9,7 +9,6 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)
 ![Workflow](https://img.shields.io/badge/workflow-agent--guided-8a63d2.svg)
 ![Output](https://img.shields.io/badge/output-Markdown-1f6feb.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-555.svg)
 
 AgentWeb2MD pairs an agent's judgment with a deterministic extraction engine. The agent defines scope, reviews the site profile, checks a small sample, reads the quality report, and iterates before any full run.
 

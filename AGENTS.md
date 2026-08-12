@@ -41,4 +41,6 @@ If these are not provided, inspect what can be verified and ask the user only fo
 - Do not hand-edit generated Markdown; fix the profile or extraction rule.
 - Do not expand crawl scope automatically after a sample passes.
 - Do not bypass authentication, access controls, site terms, or rate limits.
+- Do not run an untrusted site profile without reviewing its URLs and output paths.
+- Keep LLM credentials in environment variables referenced by `llm_refine.api_key_env`, never in JSON.
 - Do not publish, promote, or overwrite an existing library without explicit approval.

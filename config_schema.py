@@ -1359,7 +1359,7 @@ CONFIG_SCHEMA_V1 = {
             "type": "object",
             "required": False,
             "default": {},
-            "description": "LLM-based post-processing (enabled via --llm-refine flag)",
+            "description": "LLM post-processing. Store only an API key environment-variable name in api_key_env; never put a key in config.",
             "editor": "json",
         },
 

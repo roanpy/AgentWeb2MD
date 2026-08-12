@@ -19,6 +19,16 @@ def _url_join(base: str, href: str) -> str:
     """Resolve relative href against base URL using standard URL resolution."""
     return _urljoin_std(base, href)
 
+
+def _same_origin(url: str, base: str) -> bool:
+    """True for HTTP(S) URLs on the same host as base."""
+    target, source = urlparse(url), urlparse(base)
+    return (
+        target.scheme in {"http", "https"}
+        and target.scheme == source.scheme
+        and target.netloc.lower() == source.netloc.lower()
+    )
+
 try:
     import requests
     from bs4 import BeautifulSoup, Comment
@@ -96,7 +106,7 @@ def fetch_page(url, config):
     - ``"auto"``: try requests first, fallback to playwright if JS-heavy shell page detected
 
     Playwright args can be customized via ``config["playwright_args"]``:
-    - ``stealth`` (bool, default True): remove webdriver flag, set user-agent
+    - ``stealth`` (bool, default False): opt in to webdriver masking
     - ``wait_ms`` (int, default 2000): ms to wait after networkidle
     - ``headless`` (bool, default True): headless mode
     - ``viewport`` (dict): viewport size, default 1920x1080
@@ -131,7 +141,7 @@ def _looks_like_js_shell(html):
 
 def _fetch_with_playwright(url, config):
     pw_args = config.get("playwright_args", {})
-    stealth = pw_args.get("stealth", True)
+    stealth = pw_args.get("stealth", False)
     wait_ms = pw_args.get("wait_ms", 2000)
     headless = pw_args.get("headless", True)
     viewport = pw_args.get("viewport", {"width": 1920, "height": 1080})
@@ -1041,7 +1051,9 @@ def _strip_resource_card_sections(md: str) -> str:
 
 def sanitize(name):
     """Sanitize a name for filesystem use; truncates to 200 chars to stay under OS limits."""
-    s = re.sub(r'[\\/*?:"<>|]', '_', name).strip().replace(' ', '_')
+    s = re.sub(r'[\x00-\x1f\\/*?:"<>|]', '_', name).strip().replace(' ', '_').rstrip(". ")
+    if s in {"", ".", ".."}:
+        s = "_"
     # ponytail: truncate at 200 chars — OS limit is 255, leave room for parent path + extension
     return s[:200] if len(s) > 200 else s
 
@@ -1050,7 +1062,9 @@ def text_fp(html):
     if not html: return ""
     soup = BeautifulSoup(html, "html.parser")
     for t in soup(["script", "style"]): t.decompose()
-    return hashlib.md5(re.sub(r"\s+", "", soup.get_text(separator=" ")).encode()).hexdigest()
+    return hashlib.md5(
+        re.sub(r"\s+", "", soup.get_text(separator=" ")).encode(), usedforsecurity=False
+    ).hexdigest()
 
 
 def is_meaningless_image(url, filters):
@@ -1101,6 +1115,7 @@ def download_image(url, save_dir, current_name, module_name, config):
             pref = tpl(config, "image_name_pattern", current=sanitize(current_name), module=module_name) or f"{sanitize(current_name)}_{module_name}_配图"
     else:
         pref = tpl(config, "image_name_fallback") or "image"
+    pref = sanitize(pref)
     # Auto-increment sequence number per (save_dir, prefix) to avoid overwriting
     # Exception: 主图 (cover) has no sequence number
     counter_key = (save_dir, pref)
@@ -1117,7 +1132,7 @@ def download_image(url, save_dir, current_name, module_name, config):
         content = r.content
         if len(content) < 5 * 1024: return ""
         if content.startswith(b'<!doc') or content.startswith(b'<html'): return ""
-        md5 = hashlib.md5(content).hexdigest()
+        md5 = hashlib.md5(content, usedforsecurity=False).hexdigest()
         if md5 in set(config.get("filters", {}).get("banned_images_md5", [])): return ""
         # Always write file with its own name per module (same image, different tab = different file)
         # But skip re-downloading if content was already fetched
@@ -1250,6 +1265,13 @@ def validate_config(config):
     if "output_root" not in config:
         errors.append("Missing 'output_root' — needed to know where to write output")
 
+    output_structure = config.get("output_structure", {})
+    if isinstance(output_structure, dict):
+        for key in ("products_dir", "solutions_dir", "industries_dir", "image_subdir", "resource_subdir"):
+            value = output_structure.get(key)
+            if value and (os.path.isabs(value) or ".." in value.replace("\\", "/").split("/")):
+                errors.append(f"output_structure.{key} must stay relative to output_root")
+
     # ── Common misspellings ─────────────────────────────────────
     misspellings = {
         "content_selectror": "content_selector",
@@ -1265,8 +1287,11 @@ def validate_config(config):
 
     # ── render_mode validation ──────────────────────────────────
     render_mode = config.get("render_mode", "requests")
-    if render_mode not in ("requests", "playwright"):
-        errors.append(f"Invalid render_mode '{render_mode}' — must be 'requests' or 'playwright'")
+    if render_mode not in ("requests", "playwright", "auto"):
+        errors.append(f"Invalid render_mode '{render_mode}' — must be 'requests', 'playwright', or 'auto'")
+
+    if isinstance(config.get("llm_refine"), dict) and "api_key" in config["llm_refine"]:
+        errors.append("llm_refine.api_key is not allowed; use api_key_env")
 
     # ── content_selector type check ─────────────────────────────
     comp = config.get("html_components", {})
@@ -2559,6 +2584,8 @@ def _fetch_sitemap(config, disc):
             for sub_url in sub_urls:
                 if followed >= max_sub:
                     break
+                if not _same_origin(sub_url, url):
+                    continue
                 # Follow PDP sitemaps if pattern set, otherwise follow all non-docs
                 should_follow = (pdp_pat and pdp_pat in sub_url) or (not pdp_pat and "docs" not in sub_url and "blog" not in sub_url)
                 if not should_follow:
@@ -2571,7 +2598,7 @@ def _fetch_sitemap(config, disc):
                 except Exception:
                     pass
         urls = raw_urls
-    except:
+    except requests.RequestException:
         return {}
     
     # Collect products keyed by category slug
@@ -2579,6 +2606,8 @@ def _fetch_sitemap(config, disc):
     industries = []
     seen = set()
     for u in urls:
+        if not _same_origin(u, url):
+            continue
         if exclude and exclude in u:
             continue
         if prod_pat in u and (not disc.get("require_html", True) or '.html' in u):
@@ -2650,6 +2679,8 @@ def _fetch_crawl(config, disc):
         if not href or href.startswith(("#", "javascript:")):
             continue
         full = href if href.startswith("http") else _url_join(start_url, href)
+        if not _same_origin(full, start_url):
+            continue
         if "#" in full and full.split("#", 1)[0].rstrip("/") == start_url.rstrip("/"):
             continue
         if exclude and exclude in full:
@@ -2829,7 +2860,9 @@ def _web_fetch_product_children(pid, config):
     for a in soup.select(children_sel):
         href = a.get("href", "")
         if not href or href.startswith(("#", "javascript:")): continue
-        full = href if href.startswith("http") else _url_join(start_url, href)
+        full = href if href.startswith("http") else _url_join(page_url, href)
+        if not _same_origin(full, page_url):
+            continue
         if full in seen: continue
         seen.add(full)
         name = a.get_text(strip=True)
@@ -3404,7 +3437,7 @@ def download_resource(url, save_dir, name, config, current_name=""):
         rel = f"{config['output_structure']['resource_subdir']}/{filename}"
         if is_shared:
             rel = f"../{config['output_structure']['resource_subdir']}/{filename}"
-        md5 = hashlib.md5(content).hexdigest()
+        md5 = hashlib.md5(content, usedforsecurity=False).hexdigest()
         key = (save_dir, md5)
         if key in DOWNLOADED_RES_MD5: return DOWNLOADED_RES_MD5[key]
         DOWNLOADED_RES_MD5[key] = rel
@@ -3811,12 +3844,16 @@ def _build_refine_prompt(md, cfg, ctx):
 def _llm_complete(prompt, cfg):
     import requests
     provider = cfg.get("provider", "omlx")
+    api_key_env = cfg.get("api_key_env", "")
+    api_key = os.environ.get(api_key_env, "") if api_key_env else ""
     if provider == "minimax":
         url = cfg.get("endpoint") or "https://api.minimax.chat/v1/text/chatcompletion_v2"
-        headers = {"Authorization": f"Bearer {cfg.get('api_key','')}"}
+        if not api_key:
+            raise ValueError("llm_refine.api_key_env must name a populated environment variable")
+        headers = {"Authorization": f"Bearer {api_key}"}
     else:
         url = cfg.get("endpoint","http://localhost:11434/v1").rstrip("/") + "/chat/completions"
-        headers = {"Authorization": f"Bearer {cfg.get('api_key','')}"} if cfg.get("api_key") else {}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     body = {"model": cfg.get("model","qwen2.5"), "messages":[{"role":"user","content":prompt}], "max_tokens": cfg.get("max_tokens",4096), "temperature": 0}
     r = requests.post(url, headers=headers, json=body, timeout=cfg.get("timeout",60))
     return r.json()["choices"][0]["message"]["content"]

@@ -1073,15 +1073,7 @@ _IMG_COUNTER = {}  # (save_dir, prefix) → next sequence number
 def download_image(url, save_dir, current_name, module_name, config):
     if not url: return ""
     base = config["base_url"]
-    # Image URL rewrite: if site has a dedicated image download API, use it
-    img_api = config.get("api", {}).get("image_download", "")
-    if img_api and "webportal" in url and "sre-service-file" not in url:
-        import urllib.parse
-        idx = url.find("webportal")
-        if idx != -1:
-            wp_path = url[idx:].split("?")[0]
-            url = base + img_api.format(path=urllib.parse.quote(wp_path))
-    elif url.startswith("/"): url = base + url
+    if url.startswith("/"): url = base + url
     elif not url.startswith("http"): url = base + "/" + url
     # Parse fileName query param for real extension (OSS download URLs)
     import urllib.parse
@@ -2743,7 +2735,7 @@ _LIST_PAGE_PATTERNS = [
 def _is_list_page_url(url):
     path = urlparse(url).path.rstrip("/")
     if not path or path == "/":
-        return True
+        return False
     for pattern in _LIST_PAGE_PATTERNS:
         if re.search(pattern, url):
             return True
@@ -3363,14 +3355,7 @@ def extract_industry(iid, name, config, save_dir=None):
 def download_resource(url, save_dir, name, config, current_name=""):
     if not url: return ""
     base = config["base_url"]
-    img_api = config.get("api", {}).get("image_download", "")
-    if img_api and "webportal" in url and "sre-service-file" not in url:
-        import urllib.parse
-        idx = url.find("webportal")
-        if idx != -1:
-            wp_path = url[idx:].split("?")[0]
-            url = base + img_api.format(path=urllib.parse.quote(wp_path))
-    elif url.startswith("/"): url = base + url
+    if url.startswith("/"): url = base + url
     elif not url.startswith("http"): url = base + "/" + url
     try:
         r = _retry_get(url, config, timeout=30)

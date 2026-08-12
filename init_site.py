@@ -56,8 +56,6 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 
 _API_PROBES = [
     ("menu",                 "/api/menu"),
-    ("menu_homepage",        "/api/webportal-dashboard/homepage/menu"),
-    ("dashboard",            "/api/webportal-dashboard/"),
     ("products",             "/api/products"),
     ("product_detail",       "/api/v1/products"),
     ("categories",           "/api/categories"),

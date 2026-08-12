@@ -134,6 +134,8 @@ def _quality_summary(output_root: str) -> str:
 
 
 def write_standard_docs(output_root: str, config: dict) -> dict[str, str]:
+    root = Path(output_root)
+    root.mkdir(parents=True, exist_ok=True)
     docs = collect_documents(output_root, config)
     site_name = config.get("site_name") or config.get("site") or "资料库"
     base_url = config.get("base_url", "")
@@ -143,7 +145,6 @@ def write_standard_docs(output_root: str, config: dict) -> dict[str, str]:
     solution_count = len([d for d in docs if d.section == "solution"])
     industry_count = len([d for d in docs if d.section == "industry"])
 
-    root = Path(output_root)
     readme = root / "README.md"
     index = root / "全库索引.md"
     summary = root / "全库摘要.md"
@@ -170,7 +171,7 @@ def write_standard_docs(output_root: str, config: dict) -> dict[str, str]:
         "## 更新方式",
         "",
         "```bash",
-        f"python run_extraction.py --site {site_id or site_name.lower()} --page-type product --output-root {output_root}",
+        f"python extract_generic.py --site {site_id or site_name.lower()} --page-type product",
         "```",
     ])
     readme.write_text("\n".join(readme_lines) + "\n", encoding="utf-8")

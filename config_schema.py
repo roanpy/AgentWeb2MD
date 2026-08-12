@@ -1,4 +1,4 @@
-"""WebExtractMd Formal Config Schema — v1
+"""AgentWeb2MD Formal Config Schema — v1
 
 Defines every config key the engine reads: type, required, default, description,
 editor hint (for AI agents / init wizard), and which sites use it.

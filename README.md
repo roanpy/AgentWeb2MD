@@ -1,14 +1,42 @@
-# WebExtractMd
+# AgentWeb2MD
 
-Configuration-driven HTML-to-Markdown extraction with content cleanup, page discovery, image/resource handling, structured-spec sidecars, and quality reports.
+An agent-guided Markdown extraction toolkit.
 
-This public distribution intentionally contains only generic examples. Private site profiles, production destinations, generated baselines, and vendor-specific operational scripts are not included.
+AgentWeb2MD is not a one-click autonomous crawler. A coding agent inspects the target site, defines the extraction scope, reviews or edits a site profile, runs a small sample, reads the quality report, and iterates. The Python tools provide deterministic discovery, HTML-to-Markdown conversion, resource/spec sidecars, and quality checks.
+
+## Why agent-guided?
+
+Website structure and acceptable output are judgment calls. Automatically guessing selectors, crawl scope, noise rules, and quality thresholds can silently produce incomplete or polluted Markdown. AgentWeb2MD keeps those decisions with an agent or human reviewer while automating the repeatable mechanics.
+
+```text
+Agent inspects site and scope
+        ↓
+Draft and review config
+        ↓
+Run a small sample in /tmp
+        ↓
+Inspect Markdown + quality report
+        ↓
+Patch config and repeat
+        ↓
+Approve the full run
+```
+
+## Capabilities
+
+- configuration-driven URL-list, sitemap, crawl, or JSON API discovery
+- content isolation and configurable boilerplate removal
+- tables, tabs, accordions, images, and downloadable-resource handling
+- structured specification and resource sidecars
+- deterministic quality reports and local regression baselines
+- optional Playwright rendering for JavaScript-heavy pages
 
 ## Requirements
 
 - Python 3.10+
 - `requests`, `beautifulsoup4`, and `markdownify`
-- Optional: Playwright for JavaScript-rendered pages
+- a coding agent or human reviewer to drive the extraction loop
+- optional: Playwright for JavaScript-rendered pages
 
 ## Install
 
@@ -24,44 +52,78 @@ For JavaScript-rendered sites:
 .venv/bin/playwright install chromium
 ```
 
-## Quick start
+## Agent workflow
 
-Edit `config/generic/common.json` and replace `discovery.urls`, then run:
+Give your coding agent the target URL, desired content scope, exclusions, attachment policy, and quality threshold. The repository's `AGENTS.md` defines the operating contract.
 
-```bash
-.venv/bin/python extract_generic.py --site generic
-```
-
-Output defaults to `/tmp/generic_url_list_sample`. Keep first runs in a temporary directory and review the generated Markdown before using another destination.
-
-To generate a starter profile for a site:
+### 1. Probe without writing
 
 ```bash
-.venv/bin/python init_site.py --site example --base-url https://example.com --output-root /tmp/example_sample --non-interactive
+.venv/bin/python init_site.py --site example --base-url https://example.com --auto
 ```
 
-Validate a profile before extraction:
+The probe is evidence, not a final configuration. The agent must review the proposed discovery mode and selectors.
+
+### 2. Create a draft profile
+
+```bash
+.venv/bin/python init_site.py \
+  --site example \
+  --base-url https://example.com \
+  --output-root /tmp/agentweb2md/example \
+  --non-interactive
+```
+
+Alternatively, print a draft plus validation suggestions without writing files:
+
+```bash
+.venv/bin/python config_loop.py https://example.com --site example
+```
+
+### 3. Review and validate
+
+The agent should narrow discovery, set the smallest useful `content_selector`, and keep the first run capped. Then validate:
 
 ```bash
 .venv/bin/python - <<'PY'
 from extract_generic import load_config, validate_config
 
-config = load_config("config/generic/common.json")
+config = load_config("config/example/common.json")
 errors, warnings = validate_config(config)
 print({"errors": errors, "warnings": warnings})
 raise SystemExit(bool(errors))
 PY
 ```
 
-Score an extraction:
+### 4. Extract a sample
 
 ```bash
-.venv/bin/python quality_report.py --output-root /tmp/generic_url_list_sample --site generic
+.venv/bin/python extract_generic.py --site example
 ```
 
-## Profile
+### 5. Score and inspect
 
-- `generic`: extracts an explicit URL list without recursive crawling.
+```bash
+.venv/bin/python quality_report.py \
+  --output-root /tmp/agentweb2md/example \
+  --site example
+```
+
+The agent must inspect representative Markdown and `_quality_report.md`; a passing score is not a substitute for content review. Patch the profile and repeat until the sample is acceptable.
+
+### 6. Approve the full run
+
+Only remove discovery caps or change the output destination after the sample passes review. The tools never imply that generated output is approved for publication or reuse.
+
+## Generic profile
+
+`config/generic` is a safe explicit-URL-list starting point. Edit `discovery.urls`; it does not recursively crawl links.
+
+```bash
+.venv/bin/python extract_generic.py --site generic
+```
+
+Output defaults to `/tmp/generic_url_list_sample`.
 
 Generated `_baseline*.json` and `_quality_baseline.json` files are local state and are ignored by Git.
 

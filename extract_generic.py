@@ -3858,7 +3858,7 @@ def _format_json(md, config, ctx):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="通用网站提取引擎")
+    parser = argparse.ArgumentParser(description="Deterministic Markdown extraction runner for agent-reviewed profiles")
     parser.add_argument("--site", help="站点名，自动读取 config/{site}/")
     parser.add_argument("--page-type", help="分类类型（product/industry等），加载 common.json + {page_type}.json")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
@@ -3880,7 +3880,7 @@ def main():
     config = load_config(args.config, page_type=args.page_type)
     if args.llm_refine:
         config.setdefault("llm_refine", {})["enabled"] = True
-    print(f"====== 通用提取引擎 v1.0 ======")
+    print(f"====== AgentWeb2MD deterministic runner ======")
     print(f"站点: {config.get('site_name')} | 配置: {args.config}")
     print(f"输出: {config.get('output_root')}")
     print()

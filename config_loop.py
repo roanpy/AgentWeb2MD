@@ -87,12 +87,12 @@ def write_validation_report(report, output_root):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Generate, validate, and score a site config")
+    parser = argparse.ArgumentParser(description="Draft and validate a site config for agent review")
     parser.add_argument("url")
     parser.add_argument("--site", default="")
     parser.add_argument("--output-root", default="")
     parser.add_argument("--page-types", default="product,industry")
-    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--apply", action="store_true", help="write the reviewed draft config and validation report")
     parser.add_argument("--sample-root", default="", help="existing sample output root to score")
     args = parser.parse_args(argv)
     site = args.site or default_site(args.url)

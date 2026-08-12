@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WebExtractMd Site Initialization Wizard — v2
+"""AgentWeb2MD Site Initialization Wizard — v2
 
 Creates a validated config directory for a new site in 6 phases:
   1. PROBE:   Fetch homepage, detect sitemap/API/nav structure, CSS selectors
@@ -589,7 +589,7 @@ def _ask_required(preset_name: str, probe: dict) -> dict:
 # ─── MAIN ──────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="WebExtractMd Site Initialization Wizard v2")
+    parser = argparse.ArgumentParser(description="Probe a site and draft a profile for agent review")
     parser.add_argument("--site", required=True, help="Site ID (slug, used as config dir name)")
     parser.add_argument("--base-url", default="", help="Base URL of the site")
     parser.add_argument("--output-root", default="", help="Output directory path")
@@ -732,17 +732,18 @@ def main():
 
     # Summary
     print(f"\n{'='*60}")
-    print(f"✅ Site initialized: {site_id}")
+    print(f"✅ Draft profile created: {site_id}")
     print(f"  Config dir:   {config_dir}")
     print(f"  Preset:       {preset_name}")
     print(f"  Discovery:    {common.get('discovery', {}).get('mode', 'api')}")
     print(f"  Page types:   {', '.join(entity_types)}")
     print(f"  Output:       {output_root}")
     print(f"")
-    print(f"  Next steps:")
-    print(f"    1. Review config/{site_id}/common.json — adjust selectors")
-    print(f"    2. Run: python extract_generic.py --site {site_id} --init")
-    print(f"    3. Check baseline, then: python extract_generic.py --site {site_id}")
+    print(f"  Agent review required:")
+    print(f"    1. Confirm scope and review config/{site_id}/common.json")
+    print(f"    2. Cap discovery and keep the sample output under /tmp")
+    print(f"    3. Run a sample: python extract_generic.py --site {site_id}")
+    print(f"    4. Inspect Markdown and run quality_report.py before expanding scope")
     print(f"{'='*60}")
 
 

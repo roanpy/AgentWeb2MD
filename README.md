@@ -5,6 +5,7 @@
 **Agent-guided web content extraction to clean, reviewable Markdown.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+[![CI](https://github.com/roanpy/AgentWeb2MD/actions/workflows/ci.yml/badge.svg)](https://github.com/roanpy/AgentWeb2MD/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)
 ![Workflow](https://img.shields.io/badge/workflow-agent--guided-8a63d2.svg)
 ![Output](https://img.shields.io/badge/output-Markdown-1f6feb.svg)
@@ -62,6 +63,13 @@ For JavaScript-rendered sites:
 ```bash
 .venv/bin/pip install playwright
 .venv/bin/playwright install chromium
+```
+
+Run the local checks with:
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
 ```
 
 ## Agent workflow
@@ -146,3 +154,5 @@ Only extract content you are authorized to access and reuse. Respect site terms,
 ## License
 
 MIT
+
+Security issues should be reported privately as described in [SECURITY.md](SECURITY.md).

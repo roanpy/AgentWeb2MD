@@ -5,6 +5,7 @@
 **由 Agent 驱动，将网页内容提取为干净、可审查的 Markdown。**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+[![CI](https://github.com/roanpy/AgentWeb2MD/actions/workflows/ci.yml/badge.svg)](https://github.com/roanpy/AgentWeb2MD/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)
 ![Workflow](https://img.shields.io/badge/workflow-agent--guided-8a63d2.svg)
 ![Output](https://img.shields.io/badge/output-Markdown-1f6feb.svg)
@@ -62,6 +63,13 @@ python3 -m venv .venv
 ```bash
 .venv/bin/pip install playwright
 .venv/bin/playwright install chromium
+```
+
+运行本地检查：
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
 ```
 
 ## Agent 工作流
@@ -146,3 +154,5 @@ Agent 必须阅读代表性 Markdown 和 `_quality_report.md`。分数通过不�
 ## 许可证
 
 MIT
+
+安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。

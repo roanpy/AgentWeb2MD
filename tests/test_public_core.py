@@ -9,10 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_public_configs_validate():
-    for site in ("generic", "python_docs"):
-        config = load_config(str(ROOT / "config" / site / "common.json"), page_type="product")
-        errors, _warnings = validate_config(config)
-        assert errors == []
+    config = load_config(str(ROOT / "config" / "generic" / "common.json"), page_type="product")
+    errors, _warnings = validate_config(config)
+    assert errors == []
 
 
 def test_generic_conversion_removes_page_chrome():

@@ -24,8 +24,6 @@ SKIP_NAMES = {
 }
 POLLUTION = [
     "产品资讯", "其他产品", "正在加载", "请稍候", "显示更多",
-    "Beckhoff Live", "SPS 2025", "Day 1:", "技术演示", "AI technologies",
-    "#media-popup", "data-config 中的 panels",
 ]
 
 

@@ -940,14 +940,8 @@ def _fix_split_colon_labels(md: str) -> str:
 def _unwrap_iframe_srcdoc(html_str: str) -> str:
     """Replace ``<iframe srcdoc="...">`` with its unescaped inner HTML.
 
-    Sites like Hualong load product detail inside an iframe whose ``srcdoc``
-    attribute holds the entire content as an HTML-escaped string. The outer
-    page therefore shows escaped ``&lt;`` instead of real tags, so BeautifulSoup
-    cannot see the real DOM (``.hl-tabs`` etc.). Unescaping the *whole* page is
-    wrong — it also unescapes the iframe's own Vue/JSON ``props`` string, leaving
-    JSON literals like ``,"tab-xxx":"`` as visible text.
-
-    This helper scopes the unescape to ``srcdoc`` values only.
+    Unescaping only the attribute value avoids exposing unrelated escaped
+    attributes as visible text.
     """
     import html as _html
     def repl(m):
@@ -982,69 +976,9 @@ def _strip_mirrored_escaped_html_blocks(html: str) -> str:
     return escaped_block_re.sub(replace_if_mirror, html)
 
 
-def _decode_hl_tab_panels(data_config: str) -> list[str]:
-    if not data_config:
-        return []
-    try:
-        cfg = json.loads(data_config)
-    except json.JSONDecodeError:
-        return []
-    panels = cfg.get("panels", {})
-    if not isinstance(panels, dict):
-        return []
-    return [panel for panel in panels.values() if isinstance(panel, str) and panel.strip()]
-
-
 def _normalize_blank_lines(md: str) -> str:
     lines = [line.rstrip() if line.strip() else "" for line in md.splitlines()]
     return re.sub(r'\n{3,}', '\n\n', '\n'.join(lines))
-
-
-def _promote_solution_subtitles(md: str) -> str:
-    """Turn plain "X解决方案" lines under "### X" into child headings."""
-    lines = md.split('\n')
-    out = []
-    section_level = 0
-    demote_until_level = 0
-    pending_heading = ""
-    for line in lines:
-        h = re.match(r'^(#{1,6})\s+(.+)', line)
-        if h:
-            level = len(h.group(1))
-            text = h.group(2).strip()
-            if (
-                pending_heading
-                and section_level
-                and level == section_level + 1
-                and (text == f"{pending_heading}解决方案" or text.endswith("解决方案"))
-            ):
-                demote_until_level = section_level
-                out.append(line)
-                pending_heading = text
-                continue
-            if demote_until_level and level > demote_until_level and re.match(r'^[一二三四五六七八九十]+、', text):
-                line = f"{'#' * min(6, demote_until_level + 2)} {text}"
-            elif level <= demote_until_level:
-                demote_until_level = 0
-            section_level = level
-            pending_heading = text
-            out.append(line)
-            continue
-        text = line.strip()
-        if (
-            pending_heading
-            and section_level
-            and text
-            and len(text) <= 40
-            and (text == f"{pending_heading}解决方案" or text.endswith("解决方案"))
-        ):
-            demote_until_level = section_level
-            out.append(f"{'#' * min(6, section_level + 1)} {text}")
-            continue
-        if text:
-            pending_heading = ""
-        out.append(line)
-    return '\n'.join(out)
 
 
 def _strip_empty_value_labels(md: str) -> str:
@@ -1423,25 +1357,17 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
             config["html_components"] = comp_base
 
     # ── Phase -1: Decode double-escaped HTML if the site opt-in flag is set.
-    # Hualong's API returns HTML where nested blocks are stringified as
-    # &lt;p&gt;...&lt;/p&gt; inside attribute values or text nodes. Without this
-    # pass, BeautifulSoup sees the inner content as opaque text and the
-    # downstream noise filter drops it, silently losing whole sections.
+    # Some APIs return nested HTML stringified inside attributes or text nodes.
     if config.get("html_components", {}).get("unescape_double_escaped_html"):
         import html as _html
         html = _strip_mirrored_escaped_html_blocks(html)
         if "&lt;" in html or "&gt;" in html:
             html = _html.unescape(html)
-        # Hualong also wraps the HTML as a JSON string value, so interior
-        # double quotes are backslash-escaped (\"... \"). bs4 leaves the
-        # backslashes in attribute values, breaking tag parsing. Strip them.
+        # Strip JSON-style escaping that would otherwise break tag parsing.
         if '\\"' in html:
             html = html.replace('\\"', '"')
 
-    # Sites that load detail content inside <iframe srcdoc="..."> (Hualong
-    # product pages): unescape ONLY the srcdoc payload, not the surrounding
-    # Vue/JSON props on the iframe tag itself. Broader whole-page unescape
-    # leaks iframe props as visible JSON text.
+    # Unescape only the srcdoc payload, not the surrounding page.
     if config.get("html_components", {}).get("unwrap_iframe_srcdoc"):
         html = _unwrap_iframe_srcdoc(html)
 
@@ -1452,34 +1378,7 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
 
     # ── Phase 0a: Normalize custom HTML components ──
     _base = comp.get("base_heading_level", 1)
-    # Convert hl-tabs (e.g. 华龙 site) → tab labels as headings + panel content
-    if comp.get("normalize_hl_tabs"):
-        for tabs in soup.select(".hl-tabs"):
-            data_config_attr = tabs.get("data-config", "")
-            config_panels = _decode_hl_tab_panels(data_config_attr if isinstance(data_config_attr, str) else "")
-            header = tabs.select_one(".hl-tabs__header")
-            body = tabs.select_one(".hl-tabs__body")
-            if tabs.get("data-config"):
-                del tabs["data-config"]
-            if header and body:
-                tab_labels = header.select("[class*='hl-tab__item']")
-                panels = [BeautifulSoup(panel, "html.parser") for panel in config_panels] or body.select("[class*='hl-tab__panel']")
-                if tab_labels and panels:
-                    tab_h_level = _base + 1
-                    parts = []
-                    for tb, pn in zip(tab_labels, panels):
-                        label = tb.get_text(strip=True)
-                        if label:
-                            h = soup.new_tag(f"h{tab_h_level}")
-                            h.string = label
-                            parts.append(str(h))
-                        for h_tag in pn.find_all(['h1','h2','h3','h4','h5','h6']):
-                            cur = int(h_tag.name[1])
-                            new_level = min(cur + 1, 6)
-                            h_tag.name = f'h{new_level}'
-                        parts.append(str(pn))
-                    tabs.replace_with(BeautifulSoup("\n".join(parts), "html.parser"))
-    # Convert styled bold spans (e.g. 华龙's 24px/36px) to headings
+    # Convert configured styled bold spans to headings.
     # 36px = section title (H{_base}), 24px = subsection (H{_base+2})
     for size in (comp.get("visual_heading_sizes") or []):
         for span in soup.select("span"):
@@ -1597,15 +1496,11 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
     #     (extract_product_recursive / extract_industry) as the single H1.
     #     Native <h1> in body HTML (e.g. industry solution banners) would
     #     create duplicate H1s. Demote to h2 so exactly one H1 survives.
-    #     Safe for products: product HTML has no native <h1> (verified across
-    #     all hualong products — title is caller-injected at h2 level).
+    #     Callers inject the page title separately.
     for h1 in soup.find_all("h1"):
         h1.name = "h2"
 
-    # 1a-0b. Visual heading: Hualong solution pages use styled <p><strong><span
-    #     style="font-size:18px"> for section headings (一、核心价值 etc.) instead
-    #     of <h*>. Convert these to <h4> so they're not lost as plain bold text.
-    #     Only matches when <p> text == span text (no extra content in the <p>).
+    # 1a-0b. Promote configured visual headings represented by styled text.
     for p in soup.find_all("p"):
         strong = p.find("strong", recursive=False)
         if not strong: continue
@@ -1642,8 +1537,7 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
         el.decompose()
     for sel in comp.get("decompose_selectors", []):
         for el in soup.select(sel):
-            # Before decomposing, extract downloadable resource links from this element
-            # (e.g. .title-print divs contain datasheet PDFs like document.beckhoff.com/xxx.pdf)
+            # Before decomposing, extract downloadable resource links from this element.
             if resource_dir:
                 _dl_patterns = comp.get("download_link_patterns", config.get("download_link_patterns", ["download"]))
                 for a in el.find_all("a", href=True):
@@ -1778,17 +1672,6 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
                     panels[i].insert_before(heading)
                     # Mark panel with tab label so Phase 2 uses it as module_name for images
                     panels[i]["data-module-name"] = lbl_text
-                    solution_heading = None
-                    for p in panels[i].find_all("p"):
-                        t = p.get_text(strip=True)
-                        if t and len(t) <= 40 and (t == f"{lbl_text}解决方案" or t.endswith("解决方案")):
-                            p.name = f"h{min(6, tab_level + 1)}"
-                            solution_heading = p
-                            break
-                    if solution_heading:
-                        for h in panels[i].find_all(["h1", "h2", "h3", "h4", "h5"]):
-                            if h is not solution_heading and int(h.name[1]) <= tab_level + 1:
-                                h.name = f"h{min(6, tab_level + 2)}"
                     label.decompose()  # Remove original label element
         # Remove remaining tab navigation containers (ul/select/nav)
         for sel in comp.get("tab_header_to_decompose", []):
@@ -2105,7 +1988,7 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
 
     if image_dir and comp.get("download_images", True):
         for img in soup.find_all("img"):
-            src = img.get("src") or img.get("data-hl-fallback-src")
+            src = img.get("src")
             if not src or is_meaningless_image(src, filters): img.decompose(); continue
             # Use tab label as module_name if img is inside a panel with data-module-name
             img_module = module_name
@@ -2293,12 +2176,6 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
             cleaned.append(line)
         lines = cleaned
 
-    # 4c-0b. Strip JSON metadata leaks from collapse/accordion components.
-    # Hualong's hl-rich-collapse embeds section metadata as JSON strings
-    # (","id":"collapse-XXX","title":"..."},{"content":"...) that survive
-    # markdownify as standalone lines. They're not content — drop them.
-    lines = [l for l in lines if '"id":"collapse-' not in l and '"},"content":"' not in l]
-
     # 4c-1. Fix orphaned markdown link closers (markdownify splits <a> across blocks)
     md = _fix_orphan_links('\n'.join(lines))
 
@@ -2387,7 +2264,6 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
     result = _strip_empty_value_labels(result)
     result = _strip_image_alt_echoes(result)
     result = _fix_split_colon_labels(result)
-    result = _promote_solution_subtitles(result)
     if filters.get("strip_resource_card_sections"):
         result = _strip_resource_card_sections(result)
 
@@ -2408,13 +2284,7 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
             heading_level = len(h_match.group(1))
             _empty_min = heading_cfg.get("empty_heading_min_level", 3)
             _empty_title = h_match.group(2).strip()
-            _known_empty_title = _empty_title in {
-                "产品信息", "Beckhoff Information System", "媒体库",
-                "Product information", "Documentation and downloads",
-                "Accessories", "Additional products", "Related products",
-                "Further information", "软件", "附件", "Software",
-            }
-            if heading_level >= _empty_min or _known_empty_title:
+            if heading_level >= _empty_min:
                 # Look ahead: is next non-empty line also a heading or end of doc?
                 j = i + 1
                 while j < len(result_lines) and not result_lines[j].strip():
@@ -2529,11 +2399,6 @@ def _normalize_heading_jumps(md):
 def _demote_subheading_patterns(md, patterns):
     """Demote headings whose titles match known subheading patterns.
 
-    Hualong's collapse component promotes fixed-label subheadings (用户痛点,
-    自动化亮点, etc.) to the same level as their parent section heading.
-    This creates false 'empty-section' issues because the parent heading
-    appears to have no body — its body is under the sibling-level subheading.
-
     Rules:
     - Track last_real_heading_level (non-pattern headings only) so pattern
       headings don't cascade-demote each other.
@@ -2577,12 +2442,7 @@ def _demote_subheading_patterns(md, patterns):
 def _dedupe_adjacent_same_title_headings(md):
     """Drop the deeper heading when two adjacent headings share the same title.
 
-    Hualong's collapse/hl-tabs components emit the section title twice:
-    once from the structural tab header (shallower level) and once from a
-    styled <p><strong> in the panel body (deeper level via font-size
-    promotion). Keeping the deeper one creates false heading-jump quality
-    issues because it sits at h4 under an h2 section. Keep the shallower
-    one — it's the canonical structural heading.
+    Keep the shallower heading as the canonical structural heading.
     """
     lines = md.splitlines()
     out = []
@@ -2909,7 +2769,7 @@ def _web_fetch_menu(config):
 
 def fetch_product_detail(pid, config):
     # ponytail: skip API call entirely if endpoint is empty (crawl-mode sites
-    # like Siemens where pid is already a full URL). Avoids a wasted homepage fetch.
+    # When pid is already a full URL, avoid a wasted homepage fetch.
     if config.get("api", {}).get("product_detail"):
         try:
             url = config["base_url"] + config["api"]["product_detail"].format(id=pid)
@@ -3545,12 +3405,8 @@ def download_resource(url, save_dir, name, config, current_name=""):
         _shared_kw = config.get("filters", {}).get("resource_shared_keywords", [])
         is_shared = False
         if current_name:
-            core_name = re.sub(r'(可编程控制器|控制器|模块|系统|解决方案|系列)$', '', current_name).strip()
-            core_sanitized = sanitize(core_name).replace("_", "")
             name_sanitized = sanitize(clean_name).replace("_", "")
             if sanitize(current_name).replace("_", "") in name_sanitized:
-                is_shared = False
-            elif core_sanitized and core_sanitized in name_sanitized:
                 is_shared = False
             if any(kw in clean_name for kw in _shared_kw):
                 is_shared = True

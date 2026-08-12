@@ -59,10 +59,9 @@ Score an extraction:
 .venv/bin/python quality_report.py --output-root /tmp/generic_url_list_sample --site generic
 ```
 
-## Profiles
+## Profile
 
 - `generic`: extracts an explicit URL list without recursive crawling.
-- `python_docs`: small crawl-mode example using the public Python documentation.
 
 Generated `_baseline*.json` and `_quality_baseline.json` files are local state and are ignored by Git.
 

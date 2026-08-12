@@ -56,7 +56,7 @@ CONFIG_SCHEMA_V1 = {
             "default": None,
             "description": "Unique slug identifying this site (used as config dir name and baseline key)",
             "editor": "text",
-            "examples": ["beckhoff", "hualong", "siemens"],
+            "examples": ["example", "docs", "catalog"],
         },
         "site_name": {
             "type": "string",
@@ -64,7 +64,7 @@ CONFIG_SCHEMA_V1 = {
             "default": None,
             "description": "Human-readable site name (used in output footers and 三件套)",
             "editor": "text",
-            "examples": ["倍福中国", "华龙讯达", "Siemens 中国"],
+            "examples": ["Example Site", "Documentation", "Product Catalog"],
         },
         "base_url": {
             "type": "string",
@@ -72,7 +72,7 @@ CONFIG_SCHEMA_V1 = {
             "default": None,
             "description": "Root URL of the website (used for URL resolution and web fallback)",
             "editor": "url",
-            "examples": ["https://www.beckhoff.com.cn", "http://hualongxunda.com", "https://www.siemens.com"],
+            "examples": ["https://example.com", "https://docs.example.com"],
         },
 
         # ── DISCOVERY (how to find pages) ─────────────────────────
@@ -91,7 +91,7 @@ CONFIG_SCHEMA_V1 = {
                         "Discovery strategy: "
                         "'sitemap' = parse XML sitemap for URLs, "
                         "'nav' = crawl rendered page and extract nav links, "
-                        "unset = use API menu endpoint (hualong pattern)"
+                        "unset = use the configured API menu endpoint"
                     ),
                     "editor": "select",
                     "enum": ["sitemap", "nav", "crawl", "url_list", None],
@@ -103,7 +103,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": None,
                     "description": "Explicit sitemap URL (default: {base_url}/sitemap.xml)",
                     "editor": "url",
-                    "examples": ["https://www.beckhoff.com.cn/zh-cn/sitemap.xml"],
+                    "examples": ["https://example.com/sitemap.xml"],
                 },
                 "url": {
                     "type": "string",
@@ -135,7 +135,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": None,
                     "description": "Entry page for nav/crawl mode (default: base_url)",
                     "editor": "url",
-                    "examples": ["https://www.siemens.com/zh-cn/products/simatic/"],
+                    "examples": ["https://example.com/products/"],
                 },
                 "product_pattern": {
                     "type": "string",
@@ -356,7 +356,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": "",
                     "description": "Selector for tab labels (each tab becomes a section in output)",
                     "editor": "selector",
-                    "examples": ["button.nav-link", ".hl-tab__label"],
+                    "examples": ["button.nav-link", "[role='tab']"],
                 },
                 "tab_panel": {
                     "type": "string",
@@ -364,7 +364,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": "",
                     "description": "Selector for tab content panels",
                     "editor": "selector",
-                    "examples": ["div.tab-pane", ".hl-tab__panel"],
+                    "examples": ["div.tab-pane", "[role='tabpanel']"],
                 },
                 "tab_container": {
                     "type": "string",
@@ -372,7 +372,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": "",
                     "description": "Selector for the overall tab widget container",
                     "editor": "selector",
-                    "examples": [".hl-tabs"],
+                    "examples": [".tabs", "[role='tablist']"],
                 },
                 "tab_header_to_decompose": {
                     "type": "array",
@@ -380,7 +380,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": [],
                     "description": "Tab header elements to remove from output (nav UI noise)",
                     "editor": "list_selector",
-                    "examples": [["ul.nav-tabs", ".hl-tabs__header"]],
+                    "examples": [["ul.nav-tabs", ".tabs-header"]],
                 },
                 "decompose_selectors": {
                     "type": "array",
@@ -388,7 +388,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": [],
                     "description": "Elements to remove from HTML before conversion (ads, popups, boilerplate)",
                     "editor": "list_selector",
-                    "examples": [["[data-plugin='mybeckhoff']", ".cookie-banner"]],
+                    "examples": [[".account-widget", ".cookie-banner"]],
                 },
                 "carousel": {
                     "type": "string",
@@ -396,7 +396,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": "",
                     "description": "Selector for image carousel/slider widget",
                     "editor": "selector",
-                    "examples": [".hl-rich-carousel"],
+                    "examples": [".carousel"],
                 },
                 "carousel_mode": {
                     "type": "string",
@@ -412,7 +412,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": "",
                     "description": "Selector for images within carousel",
                     "editor": "selector",
-                    "examples": [".hl-rich-carousel img"],
+                    "examples": [".carousel img"],
                 },
                 "collapse": {
                     "type": "string",
@@ -420,7 +420,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": "",
                     "description": "Selector for collapsible/accordion sections",
                     "editor": "selector",
-                    "examples": [".hl-rich-collapse"],
+                    "examples": [".accordion"],
                 },
                 "collapse_header": {
                     "type": "string",
@@ -428,7 +428,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": "",
                     "description": "Selector for collapse section headers (becomes headings in output)",
                     "editor": "selector",
-                    "examples": [".hl-collapse__header"],
+                    "examples": [".accordion-header"],
                 },
                 "contact_block_selector": {
                     "type": "string",
@@ -466,7 +466,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": [],
                     "description": "URL substrings identifying downloadable resources (PDF, ZIP, etc.)",
                     "editor": "list_text",
-                    "examples": [["document.beckhoff.com", ".pdf", ".zip"]],
+                    "examples": [["downloads.example.com", ".pdf", ".zip"]],
                 },
                 "download_tab_labels": {
                     "type": "array",
@@ -546,14 +546,14 @@ CONFIG_SCHEMA_V1 = {
                     "type": "boolean",
                     "required": False,
                     "default": False,
-                    "description": "Decode &lt; / &gt; / &quot; in source HTML before BeautifulSoup parses. Needed for sites whose API returns nested HTML stringified inside attribute values (e.g. Hualong). Off by default — only enable when source HTML genuinely double-escapes.",
+                    "description": "Decode &lt; / &gt; / &quot; in source HTML before BeautifulSoup parses. Enable only when an API genuinely returns double-escaped nested HTML.",
                     "editor": "flag",
                 },
                 "unwrap_iframe_srcdoc": {
                     "type": "boolean",
                     "required": False,
                     "default": False,
-                    "description": "Replace <iframe srcdoc=\"...\"> with the unescaped inner HTML before BeautifulSoup parses. Needed for sites that load detail content inside an iframe srcdoc attribute (e.g. Hualong product pages). Off by default — enable per-site when source uses iframe srcdoc wrapping.",
+                    "description": "Replace <iframe srcdoc=\"...\"> with the unescaped inner HTML before BeautifulSoup parses. Enable only when content is wrapped in iframe srcdoc.",
                     "editor": "flag",
                 },
                 "subheading_demote_patterns": {
@@ -561,7 +561,7 @@ CONFIG_SCHEMA_V1 = {
                     "items": {"type": "string"},
                     "required": False,
                     "default": [],
-                    "description": "Heading title substrings that should be demoted one level when they appear at the same level as their parent section. Catches collapse-component false-sibling headings (e.g. Hualong's 用户痛点/自动化亮点 promoted to h3 alongside the section h3).",
+                    "description": "Heading title substrings to demote when a component emits child headings at the same level as their parent.",
                     "editor": "list",
                 },
                 "tab_heading_level": {
@@ -592,13 +592,6 @@ CONFIG_SCHEMA_V1 = {
                     "description": "Template for related product wiki links: {name}, {desc} placeholders",
                     "editor": "template",
                 },
-                "normalize_hl_tabs": {
-                    "type": "boolean",
-                    "required": False,
-                    "default": False,
-                    "description": "Convert hl-tabs custom tab components to heading + panel sections",
-                    "editor": "flag",
-                },
                 "visual_heading_sizes": {
                     "type": "array",
                     "required": False,
@@ -625,7 +618,7 @@ CONFIG_SCHEMA_V1 = {
             "default": {},
             "description": (
                 "Maps engine field names → JSON API response field names. "
-                "Only needed for API-driven sites (hualong pattern). "
+                "Only needed for API-driven sites. "
                 "For web-scraped sites, use html_components selectors instead."
             ),
             "editor": "key_value",
@@ -715,7 +708,7 @@ CONFIG_SCHEMA_V1 = {
                     "default": {},
                     "description": "Map hostname → full URL prefix for restoring stripped external links",
                     "editor": "key_value",
-                    "examples": [{"infosys.beckhoff.com": "https://infosys.beckhoff.com"}],
+                    "examples": [{"docs.example.com": "https://docs.example.com"}],
                 },
                 "resource_shared_keywords": {
                     "type": "array",
@@ -921,7 +914,7 @@ CONFIG_SCHEMA_V1 = {
             "default": None,
             "description": "Absolute path to the output directory (where 产品/, 解决方案/, etc. are created)",
             "editor": "text",
-            "examples": ["/path/to/SynologyDrive/.../Beckhoff"],
+            "examples": ["/path/to/output"],
         },
         "destinations": {
             "type": "object",
@@ -1435,7 +1428,7 @@ PRESETS = {
     "product_catalog_sitemap": {
         "description": (
             "Product catalog site with XML sitemap. "
-            "Best for: sites like Beckhoff/Siemens with structured sitemap and product/industry URL patterns."
+            "Best for sites with a structured sitemap and product or category URL patterns."
         ),
         "config": {
             "discovery": {"mode": "sitemap"},
@@ -1467,7 +1460,7 @@ PRESETS = {
     "product_catalog_api": {
         "description": (
             "Product catalog site with JSON API backend. "
-            "Best for: sites like 华龙 with /api/ endpoints returning structured product/industry data."
+            "Best for sites with API endpoints returning structured page data."
         ),
         "config": {
             "render_mode": "requests",
@@ -1718,7 +1711,7 @@ PRESETS = {
     "product_specs_sitemap": {
         "description": (
             "Product detail pages with structured specifications. "
-            "Best for: sites like Rockwell where product detail pages contain spec tables. "
+            "Best for product detail pages that contain specification tables. "
             "Enables spec extraction cascade and spec_tables content block."
         ),
         "config": {

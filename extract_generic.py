@@ -14,6 +14,9 @@
 import os, re, sys, json, hashlib, argparse, time
 from urllib.parse import urlparse, parse_qs, urljoin as _urljoin_std
 
+from agentweb2md_paths import site_config_dir, state_file, validate_identifier, validate_site_id
+from http_utils import DEFAULT_MAX_RESPONSE_BYTES, ResponseTooLarge, buffer_response
+
 
 def _url_join(base: str, href: str) -> str:
     """Resolve relative href against base URL using standard URL resolution."""
@@ -48,9 +51,7 @@ from resources_output import record_resource, write_resources_output
 from specs_output import record_specs, write_specs_output
 
 DEFAULT_SITE = os.environ.get("WEM_SITE", "generic")
-DEFAULT_CONFIG = os.path.join(os.path.dirname(__file__), "config", DEFAULT_SITE, "common.json")
-DEFAULT_BASELINE = os.path.join(os.path.dirname(__file__), "config", DEFAULT_SITE, "_baseline.json")
-INIT_CHECKPOINT = os.path.join(os.path.dirname(__file__), "_init_checkpoint.json")
+DEFAULT_CONFIG = str(site_config_dir(DEFAULT_SITE) / "common.json")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
 DOWNLOADED_IMG_MD5 = {}
@@ -69,27 +70,36 @@ def _throttle(config):
     _last_request_time = time.time()
 
 
-def _retry_get(url, config, timeout=15):
-    max_retries = config.get("rate_limit", {}).get("max_retries", 3)
-    backoff = config.get("rate_limit", {}).get("retry_backoff_base", 2)
+def _retry_get(url, config, timeout=None):
+    rate = config.get("rate_limit", {})
+    max_retries = int(rate.get("max_retries", 3))
+    backoff = rate.get("retry_backoff_base", 2)
+    timeout = timeout or rate.get("timeout", 15)
+    max_bytes = int(rate.get("max_response_bytes", DEFAULT_MAX_RESPONSE_BYTES))
+    if max_retries < 1 or timeout <= 0 or max_bytes <= 0:
+        raise ValueError("invalid rate_limit request bounds")
     for attempt in range(max_retries):
         _throttle(config)
+        r = None
         try:
-            r = requests.get(url, headers=HEADERS, timeout=timeout)
-            if r.status_code == 200:
-                if not r.encoding or r.encoding.lower() in ("iso-8859-1",):
-                    r.encoding = r.apparent_encoding or "utf-8"
-                return r
+            r = requests.get(url, headers=HEADERS, timeout=timeout, stream=True)
             if r.status_code in (429, 503) and attempt < max_retries - 1:
+                r.close()
                 time.sleep(backoff ** attempt)
                 continue
             r.raise_for_status()
+            buffer_response(r, max_bytes=max_bytes)
+            if not r.encoding or r.encoding.lower() in ("iso-8859-1",):
+                r.encoding = r.apparent_encoding or "utf-8"
+            return r
         except requests.RequestException:
+            if r is not None:
+                r.close()
             if attempt < max_retries - 1:
                 time.sleep(backoff ** attempt)
             else:
                 raise
-    return r
+    raise RuntimeError("request retry loop ended unexpectedly")
 
 
 def _web_fetch(url, config):
@@ -157,21 +167,26 @@ def _fetch_with_playwright(url, config):
     with sync_playwright() as p:
         launch_args = ["--disable-blink-features=AutomationControlled"] if stealth else []
         browser = p.chromium.launch(headless=headless, args=launch_args)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            locale=config.get("locale", "zh-CN"),
-            viewport=viewport,
-        )
-        page = context.new_page()
-        if stealth:
-            page.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        try:
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                locale=config.get("locale", "zh-CN"),
+                viewport=viewport,
             )
-        page.goto(url, timeout=30000, wait_until="networkidle")
-        page.wait_for_timeout(wait_ms)
-        html = page.content()
-        browser.close()
+            page = context.new_page()
+            if stealth:
+                page.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
+            page.goto(url, timeout=30000, wait_until="networkidle")
+            page.wait_for_timeout(wait_ms)
+            html = page.content()
+            max_bytes = int(config.get("rate_limit", {}).get("max_response_bytes", DEFAULT_MAX_RESPONSE_BYTES))
+            if len(html.encode("utf-8")) > max_bytes:
+                raise ResponseTooLarge(f"rendered page exceeds {max_bytes} byte limit")
+        finally:
+            browser.close()
 
     return html
 
@@ -211,6 +226,7 @@ def load_config(path, page_type=None):
 
     # New split config: common.json + {page_type}.json
     if page_type:
+        validate_identifier(page_type, "page type")
         common_path = os.path.join(config_dir, "common.json")
         type_path = os.path.join(config_dir, f"{page_type}.json")
         if not os.path.exists(common_path):
@@ -1154,7 +1170,8 @@ def _normalize_config(config):
     Also allows top-level `filters`, `heading`, `templates` keys.
     Returns a normalized config with everything under the expected nested keys.
     """
-    comp = config.get("html_components", {})
+    raw_comp = config.get("html_components", {})
+    comp = dict(raw_comp) if isinstance(raw_comp, dict) else raw_comp
     # Promote flat keys into html_components if they're not already there
     flat_keys = ["content_selector", "tab_label", "tab_panel",
                  "tab_header_to_decompose", "decompose_selectors",
@@ -1162,9 +1179,10 @@ def _normalize_config(config):
                  "carousel", "carousel_mode",
                  "carousel_image_selector", "contact_block_selector",
                  "boilerplate_disable", "boilerplate_class_exceptions"]
-    for key in flat_keys:
-        if key in config and key not in comp:
-            comp[key] = config[key]
+    if isinstance(comp, dict):
+        for key in flat_keys:
+            if key in config and key not in comp:
+                comp[key] = config[key]
     # Promote flat filters/heading/templates into nested if missing
     normalized = dict(config)  # shallow copy
     normalized["html_components"] = comp
@@ -1295,7 +1313,7 @@ def validate_config(config):
 
     # ── content_selector type check ─────────────────────────────
     comp = config.get("html_components", {})
-    sel = comp.get("content_selector", "")
+    sel = comp.get("content_selector", "") if isinstance(comp, dict) else ""
     if sel and not isinstance(sel, str):
         errors.append(f"content_selector must be a string, got {type(sel).__name__}")
 
@@ -1319,12 +1337,17 @@ def validate_config(config):
 
     # ── Deep type validation using formal schema (if available) ─
     try:
-        from config_schema import CONFIG_SCHEMA_V1, _check_type
+        from config_schema import CONFIG_SCHEMA_V1, _check_type, validate_runtime_constraints
         schema_props = CONFIG_SCHEMA_V1["properties"]
+        for key, value in config.items():
+            field = schema_props.get(key)
+            expected = field.get("type") if field else None
+            if expected and value is not None and not _check_type(value, expected):
+                errors.append(f"{key} expected type {expected}, got {type(value).__name__}")
         # Check discovery sub-keys
         disc = config.get("discovery", {})
         disc_schema = schema_props.get("discovery", {}).get("properties", {})
-        for k, v in disc.items():
+        for k, v in disc.items() if isinstance(disc, dict) else ():
             if k in disc_schema:
                 expected = disc_schema[k].get("type")
                 if expected and v is not None and not _check_type(v, expected):
@@ -1334,17 +1357,20 @@ def validate_config(config):
         # Check output_structure sub-keys
         out = config.get("output_structure", {})
         out_schema = schema_props.get("output_structure", {}).get("properties", {})
-        for k, v in out.items():
+        for k, v in out.items() if isinstance(out, dict) else ():
             if k in out_schema:
                 expected = out_schema[k].get("type")
                 if expected and v is not None and not _check_type(v, expected):
                     errors.append(f"output_structure.{k} expected type {expected}, got {type(v).__name__}")
+        errors.extend(validate_runtime_constraints(config))
     except ImportError:
         pass  # config_schema not available, skip deep validation
 
     # ── Dead key detection ──────────────────────────────────────
     for section, keys in _DEAD_CONFIG_KEYS.items():
         parent = config.get(section, {}) if section else config
+        if not isinstance(parent, dict):
+            continue
         for k in keys:
             if parent.get(k):
                 warnings.append(f"Config key '{section}.{k}' is defined but not yet consumed by the engine (dead key)")
@@ -3457,6 +3483,7 @@ def load_baseline(path):
 
 
 def save_baseline(state, path):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f: json.dump(state, f, ensure_ascii=False, indent=2)
 
 
@@ -3480,9 +3507,9 @@ def detect_changes(state, config):
                 pid = p.get(fm(config, "item_id", "id"))
                 fp = text_fp(fm_get(fetch_product_detail(pid, config), config, "product_html", ""))
                 base = state["products"].get(pid, {})
-                name = fm_get(p, config, "item_name", "")
-                if not base: changes["new"].append(("product", pid, name, ""))
-                elif base.get("fp") != fp: changes["changed"].append(("product", pid, name, ""))
+                name = p.get(fm(config, "item_name", "name"), "")
+                if not base: changes["new"].append(("product", pid, name, "", p))
+                elif base.get("fp") != fp: changes["changed"].append(("product", pid, name, "", p))
             except Exception as e:
                 changes["errors"].append(("product", p.get(fm(config, "item_id", "id")), str(e)))
     for ind in menu.get(ind_key, []):
@@ -3490,9 +3517,9 @@ def detect_changes(state, config):
             iid = ind.get(fm(config, "item_id", "id"))
             fp = text_fp(fm_get(fetch_industry_detail(iid, config), config, "industry_html", ""))
             base = state["industries"].get(iid, {})
-            name = fm_get(ind, config, "item_name", "")
-            if not base: changes["new"].append(("industry", iid, name, ""))
-            elif base.get("fp") != fp: changes["changed"].append(("industry", iid, name, ""))
+            name = ind.get(fm(config, "item_name", "name"), "")
+            if not base: changes["new"].append(("industry", iid, name, "", ind))
+            elif base.get("fp") != fp: changes["changed"].append(("industry", iid, name, "", ind))
         except Exception as e:
             changes["errors"].append(("industry", ind.get(fm(config, "item_id", "id")), str(e)))
     return changes
@@ -3514,15 +3541,16 @@ def refresh_baseline(items, config, path):
     return errors
 
 
-def load_init_checkpoint():
-    if os.path.exists(INIT_CHECKPOINT):
-        with open(INIT_CHECKPOINT, encoding="utf-8") as f:
+def load_init_checkpoint(path):
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     return {"done_ids": [], "items": []}
 
 
-def save_init_checkpoint(state):
-    with open(INIT_CHECKPOINT, "w", encoding="utf-8") as f:
+def save_init_checkpoint(state, path):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
@@ -3747,7 +3775,8 @@ def _print_quality_report(result):
 
 def init_baseline_batched(config, baseline_path, batch_size=20):
     """分批初始化基线，支持断点续传。"""
-    ckpt = load_init_checkpoint()
+    checkpoint_path = str(state_file(config.get("site_id", "generic"), "_init_checkpoint.json"))
+    ckpt = load_init_checkpoint(checkpoint_path)
     if ckpt.get("items"):
         items = ckpt["items"]
         done = set(ckpt.get("done_ids", []))
@@ -3756,7 +3785,7 @@ def init_baseline_batched(config, baseline_path, batch_size=20):
         print("🔍 收集所有产品/方案 ID...")
         items = collect_all_items(config)
         ckpt = {"items": items, "done_ids": []}
-        save_init_checkpoint(ckpt)
+        save_init_checkpoint(ckpt, checkpoint_path)
         print(f"共 {len(items)} 项，分批处理（每批 {batch_size}）")
 
     state = load_baseline(baseline_path)
@@ -3779,13 +3808,15 @@ def init_baseline_batched(config, baseline_path, batch_size=20):
             except Exception as e:
                 print(f"    ⚠️ {name} ({pid}): {e}")
         save_baseline(state, baseline_path)
-        save_init_checkpoint(ckpt)
+        save_init_checkpoint(ckpt, checkpoint_path)
         time.sleep(0.2)  # 避免过快触发限流
 
     # 清理 checkpoint
-    if os.path.exists(INIT_CHECKPOINT):
-        os.remove(INIT_CHECKPOINT)
+    complete = total > 0 and len(ckpt["done_ids"]) == total
+    if complete and os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
     print(f"✅ 已为 {len(ckpt['done_ids'])}/{total} 项建立基线")
+    return 0 if complete else 1
 
 
 def _loss_guard(original, refined, threshold=0.05):
@@ -3817,7 +3848,9 @@ def _llm_refine(md, config, ctx):
             _log_refine_skip(ctx, md, "content_loss")
             return md
         return refined
-    except Exception as e:
+    except Exception:
+        if config.get("__llm_refine_cli"):
+            raise
         return md
 
 
@@ -3855,7 +3888,13 @@ def _llm_complete(prompt, cfg):
         url = cfg.get("endpoint","http://localhost:11434/v1").rstrip("/") + "/chat/completions"
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     body = {"model": cfg.get("model","qwen2.5"), "messages":[{"role":"user","content":prompt}], "max_tokens": cfg.get("max_tokens",4096), "temperature": 0}
-    r = requests.post(url, headers=headers, json=body, timeout=cfg.get("timeout",60))
+    r = requests.post(url, headers=headers, json=body, timeout=cfg.get("timeout", 60), stream=True)
+    try:
+        r.raise_for_status()
+    except requests.RequestException:
+        r.close()
+        raise
+    buffer_response(r, int(cfg.get("max_response_bytes", DEFAULT_MAX_RESPONSE_BYTES)))
     return r.json()["choices"][0]["message"]["content"]
 
 
@@ -3894,12 +3933,21 @@ def _format_json(md, config, ctx):
     }, ensure_ascii=False, indent=2)
 
 
-def main():
+def _inherit_run_state(run_config, page_config):
+    """Carry CLI overrides and aggregate records into per-page-type configs."""
+    if run_config.get("__llm_refine_cli"):
+        page_config.setdefault("llm_refine", {})["enabled"] = True
+    for key in ("__spec_records", "__resource_records"):
+        page_config[key] = run_config[key]
+    return page_config
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Deterministic Markdown extraction runner for agent-reviewed profiles")
     parser.add_argument("--site", help="站点名，自动读取 config/{site}/")
     parser.add_argument("--page-type", help="分类类型（product/industry等），加载 common.json + {page_type}.json")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
-    parser.add_argument("--baseline", default=DEFAULT_BASELINE)
+    parser.add_argument("--baseline")
     parser.add_argument("--incremental", action="store_true")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--init", action="store_true")
@@ -3907,16 +3955,29 @@ def main():
     parser.add_argument("--quality-check", action="store_true", help="对照质量基线评估当前提取结果")
     parser.add_argument("--llm-refine", action="store_true", help="使用本地LLM精修提取的Markdown")
     parser.add_argument("--format", choices=["md", "obsidian", "json"], default="md", help="输出格式：md(默认)/obsidian(YAML frontmatter+wiki链接)/json(结构化)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     
     if args.site:
-        config_dir = os.path.join(os.path.dirname(__file__), "config", args.site)
+        try:
+            validate_site_id(args.site)
+        except ValueError as error:
+            parser.error(str(error))
+        config_dir = str(site_config_dir(args.site))
         args.config = os.path.join(config_dir, "common.json")
-        args.baseline = os.path.join(config_dir, "_baseline.json")
+
+    try:
+        if args.page_type:
+            validate_identifier(args.page_type, "page type")
+    except ValueError as error:
+        parser.error(str(error))
 
     config = load_config(args.config, page_type=args.page_type)
+    run_site_id = config.get("site_id", args.site or DEFAULT_SITE)
+    if args.baseline is None:
+        args.baseline = str(state_file(run_site_id, "_baseline.json"))
     if args.llm_refine:
         config.setdefault("llm_refine", {})["enabled"] = True
+        config["__llm_refine_cli"] = True
     print(f"====== AgentWeb2MD deterministic runner ======")
     print(f"站点: {config.get('site_name')} | 配置: {args.config}")
     print(f"输出: {config.get('output_root')}")
@@ -3924,39 +3985,44 @@ def main():
 
     # Quality baseline operations
     if args.quality_init:
-        qb_path = os.path.join(os.path.dirname(args.config), "_quality_baseline.json")
+        qb_path = str(state_file(run_site_id, "_quality_baseline.json"))
         qb = generate_quality_baseline(config["output_root"], config)
+        os.makedirs(os.path.dirname(qb_path), exist_ok=True)
         with open(qb_path, "w", encoding="utf-8") as f:
             json.dump(qb, f, ensure_ascii=False, indent=2)
         print(f"✅ 质量基线已生成: {qb_path} ({len(qb['items'])} 项)")
-        return
+        return 0 if qb["items"] else 1
 
     if args.quality_check:
-        qb_path = os.path.join(os.path.dirname(args.config), "_quality_baseline.json")
+        qb_path = str(state_file(run_site_id, "_quality_baseline.json"))
         result = evaluate_against_baseline(config["output_root"], config, qb_path)
         _print_quality_report(result)
-        return
+        return int(
+            result["status"] != "ok"
+            or bool(result.get("regressions"))
+            or bool(result.get("missing_items"))
+        )
 
     if args.init:
-        init_baseline_batched(config, args.baseline)
-        return
+        return init_baseline_batched(config, args.baseline)
 
     if args.check:
         state = load_baseline(args.baseline)
         changes = detect_changes(state, config)
+        for kind, pid, error in changes["errors"]:
+            print(f"  ❌ {kind} {pid}: {error}")
         if not changes["new"] + changes["changed"]:
-            print("✅ 无变更")
+            print("✅ 无变更" if not changes["errors"] else "❌ 变更检测不完整")
         else:
             for c in changes["new"]: print(f"  + 新增 {c[0]}: {c[2]}")
             for c in changes["changed"]: print(f"  ~ 变更 {c[0]}: {c[2]}")
-        return
+        return int(bool(changes["errors"]))
 
     # Read entity types from config (default: product + industry)
     extract_cfg = config.get("extraction", {})
     entity_types = extract_cfg.get("entity_types", ["product", "industry"])
     cat_filter = extract_cfg.get("category_filter", [])  # optional: only extract named categories
 
-    menu = fetch_menu(config)
     out = config["output_root"]
     config["__spec_records"] = []
     config["__resource_records"] = []
@@ -3967,12 +4033,17 @@ def main():
     if args.incremental:
         state = load_baseline(args.baseline)
         changes = detect_changes(state, config)
+        discovery_errors = changes["errors"]
+        for kind, pid, error in discovery_errors:
+            print(f"  ❌ {kind} {pid}: {error}")
         to_run = changes["new"] + changes["changed"]
         if not to_run:
-            print("✅ 无变更，无需重跑"); return
+            print("✅ 无变更，无需重跑" if not discovery_errors else "❌ 变更检测不完整")
+            return int(bool(changes["errors"]))
         print(f"检测到 {len(to_run)} 项变更，定向重跑...")
         items = to_run
     else:
+        discovery_errors = []
         items = collect_all_items(config)
         print(f"全量提取 {len(items)} 项...")
 
@@ -3984,13 +4055,18 @@ def main():
     if cat_filter:
         items = [i for i in items if i[3] in cat_filter]
     print(f"提取 {len(items)} 项（类型: {entity_types}）")
+    if not items:
+        print("❌ 未发现可提取页面")
+        return 1
     cat_name_map = config.get("category_name_map", {})
+    completed_items = []
+    failures = list(discovery_errors)
     for kind, pid, name, cat, item_dict in items:
         cat = cat_name_map.get(cat, cat)
         try:
             # Load page-type-specific config (e.g. product.json, industry.json)
             page_type = "product" if kind == "product" else "industry"
-            cfg = load_config(args.config, page_type=page_type)
+            cfg = _inherit_run_state(config, load_config(args.config, page_type=page_type))
             # Extract features and cover from menu item dict if available
             features = fm_get(item_dict, cfg, "item_features", "") if item_dict else ""
             cover = fm_get(item_dict, cfg, "item_cover", "") if item_dict else ""
@@ -4012,12 +4088,18 @@ def main():
                 md_path = os.path.join(sol_dir, f"{sanitize(name)}{_ext}")
                 os.makedirs(sol_dir, exist_ok=True)
                 with open(md_path, "w", encoding="utf-8") as f: f.write(_out)
-            print(f"  ✅ {name}"); count += 1
+            print(f"  ✅ {name}")
+            count += 1
+            completed_items.append((kind, pid, name, cat, item_dict))
         except Exception as e:
             print(f"  ❌ {name}: {e}")
+            failures.append((kind, pid, name))
 
     if args.incremental:
-        refresh_baseline(items, config, args.baseline)
+        baseline_errors = refresh_baseline(completed_items, config, args.baseline)
+        for kind, pid, name, error in baseline_errors:
+            print(f"  ❌ 基线未刷新 {name or pid}: {error}")
+        failures.extend((kind, pid, name) for kind, pid, name, _error in baseline_errors)
     print(f"\n🎉 完成 {count}/{len(items)}")
 
     # Post-extraction: generate summary / index if configured
@@ -4037,7 +4119,8 @@ def main():
     resource_path = write_resources_output(out, config.get("__resource_records", []))
     if resource_path:
         print(f"📎 资料索引已生成: {resource_path}")
+    return int(bool(failures))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

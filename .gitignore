@@ -10,6 +10,10 @@ __pycache__/
 *.key
 *.p12
 *.pfx
+.agentweb2md/
+build/
+dist/
+*.egg-info/
 _baseline*.json
 _quality_baseline.json
 _download_checkpoint.json

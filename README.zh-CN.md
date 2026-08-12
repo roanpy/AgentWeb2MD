@@ -52,9 +52,18 @@ Agent 检查网站与提取范围
 
 ## 安装
 
+从源码目录安装：
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+也可以安装 GitHub Release 附带的 wheel：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install ./agentweb2md-0.1.0-py3-none-any.whl
 ```
 
 如需提取 JavaScript 渲染的网站：
@@ -71,7 +80,11 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pip_audit --progress-spinner off
 .venv/bin/python -m bandit -q -lll -r . -x ./.git,./tests
+.venv/bin/python -m ruff check --select E9,F63,F7,F82 .
+.venv/bin/python -m build
 ```
+
+安装后会提供 `agentweb2md`、`agentweb2md-init`、`agentweb2md-config` 和 `agentweb2md-quality` 四个命令。从源码目录运行时，原有 Python 脚本仍可使用。
 
 ## Agent 工作流
 
@@ -80,7 +93,7 @@ python3 -m venv .venv
 ### 1. 只探测，不写入配置
 
 ```bash
-.venv/bin/python init_site.py --site example --base-url https://example.com --auto
+.venv/bin/agentweb2md-init --site example --base-url https://example.com --auto
 ```
 
 探测结果只是证据，不是最终配置。Agent 必须审查建议的发现模式与选择器。
@@ -88,7 +101,7 @@ python3 -m venv .venv
 ### 2. 创建配置草案
 
 ```bash
-.venv/bin/python init_site.py \
+.venv/bin/agentweb2md-init \
   --site example \
   --base-url https://example.com \
   --output-root /tmp/agentweb2md/example \
@@ -98,7 +111,7 @@ python3 -m venv .venv
 也可以只输出配置草案与验证建议，不写入文件：
 
 ```bash
-.venv/bin/python config_loop.py https://example.com --site example
+.venv/bin/agentweb2md-config https://example.com --site example
 ```
 
 ### 3. 审查并验证配置
@@ -119,13 +132,13 @@ PY
 ### 4. 提取小样
 
 ```bash
-.venv/bin/python extract_generic.py --site example
+.venv/bin/agentweb2md --site example
 ```
 
 ### 5. 评分并检查
 
 ```bash
-.venv/bin/python quality_report.py \
+.venv/bin/agentweb2md-quality \
   --output-root /tmp/agentweb2md/example \
   --site example
 ```
@@ -141,12 +154,14 @@ Agent 必须阅读代表性 Markdown 和 `_quality_report.md`。分数通过不�
 `config/generic` 是安全的显式 URL 列表起点。编辑 `discovery.urls` 即可；该配置不会递归抓取链接。
 
 ```bash
-.venv/bin/python extract_generic.py --site generic
+.venv/bin/agentweb2md --site generic
 ```
 
 默认输出目录为 `/tmp/generic_url_list_sample`。
 
-自动生成的 `_baseline*.json` 和 `_quality_baseline.json` 属于本地状态文件，已被 Git 忽略。
+默认从 `./config` 读取站点配置；可通过 `AGENTWEB2MD_CONFIG_DIR` 指定其他可写配置目录。基线和断点状态默认写入 `./.agentweb2md`；可通过 `AGENTWEB2MD_STATE_DIR` 修改位置。
+
+发现结果为空、任一页面失败或质量门禁失败时，提取与质量命令都会返回非零状态，Agent 和 CI 可以据此可靠停止。单次 HTTP 响应默认限制为 25 MiB；只有审查确认确有需要时，才应提高正数配置 `rate_limit.max_response_bytes`。
 
 ## 使用边界
 

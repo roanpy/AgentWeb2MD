@@ -1,0 +1,3 @@
+include AGENTS.md README.zh-CN.md SECURITY.md requirements.txt requirements-dev.txt
+recursive-include config/generic *.json
+recursive-include tests *.py

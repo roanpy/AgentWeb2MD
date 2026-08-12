@@ -25,6 +25,9 @@ import re
 import sys
 from urllib.parse import urlparse
 
+from agentweb2md_paths import validate_identifier, validate_site_id, writable_config_root
+from http_utils import DEFAULT_MAX_RESPONSE_BYTES, buffer_response
+
 WORKDIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, WORKDIR)
 
@@ -37,6 +40,7 @@ from config_schema import (
     _field_schema,
     _check_type,
     SCHEMA_VERSION,
+    validate_runtime_constraints,
 )
 
 # ─── Lazy imports for probe phase (may not be needed in --non-interactive) ──
@@ -62,6 +66,11 @@ _API_PROBES = [
     ("nav",                  "/api/nav"),
     ("sitemap",              "/sitemap.xml"),
 ]
+
+
+def _probe_get(requests, url: str, timeout: int):
+    response = requests.get(url, timeout=timeout, headers=HEADERS, stream=True)
+    return buffer_response(response, DEFAULT_MAX_RESPONSE_BYTES)
 
 
 def _probe_site(base_url: str, timeout: int = 15) -> dict:
@@ -92,7 +101,7 @@ def _probe_site(base_url: str, timeout: int = 15) -> dict:
 
     # 1. Check sitemap
     try:
-        r = requests.get(base_url.rstrip("/") + "/sitemap.xml", timeout=timeout, headers=HEADERS)
+        r = _probe_get(requests, base_url.rstrip("/") + "/sitemap.xml", timeout)
         if r.status_code == 200 and "<url" in r.text[:2000].lower():
             result["has_sitemap"] = True
             urls = re.findall(r'https?://[^<>\s"\']+', r.text)
@@ -110,7 +119,7 @@ def _probe_site(base_url: str, timeout: int = 15) -> dict:
     # 2. Probe API endpoints
     for name, path in _API_PROBES:
         try:
-            r = requests.get(base_url.rstrip("/") + path, headers=HEADERS, timeout=5)
+            r = _probe_get(requests, base_url.rstrip("/") + path, 5)
             ct = r.headers.get("content-type", "")
             if r.status_code == 200 and ("json" in ct or "xml" in ct):
                 result["api_hits"][name] = path
@@ -122,7 +131,7 @@ def _probe_site(base_url: str, timeout: int = 15) -> dict:
 
     # 3. Fetch homepage for structure detection
     try:
-        r = requests.get(base_url, timeout=timeout, headers=HEADERS)
+        r = _probe_get(requests, base_url, timeout)
         if r.status_code != 200:
             print(f"  ⚠ Homepage returned HTTP {r.status_code}")
             return result
@@ -415,9 +424,15 @@ def _validate_config(config: dict) -> tuple[list, list]:
 
     # Type checks and nested validation
     for key, value in config.items():
-        if key.startswith("__") or not isinstance(value, dict):
+        if key.startswith("__"):
             continue
         field = schema_props.get(key, {})
+        expected = field.get("type")
+        if expected and value is not None and not _check_type(value, expected):
+            errors.append(f"'{key}' expected type {expected}, got {type(value).__name__}")
+            continue
+        if not isinstance(value, dict):
+            continue
         if "properties" in field:
             sub_e, sub_w = _validate_nested(value, field["properties"], f"{key}.")
             errors.extend(sub_e)
@@ -429,6 +444,7 @@ def _validate_config(config: dict) -> tuple[list, list]:
         if val is not None and not isinstance(val, list):
             errors.append(f"'{key}' must be a list, got {type(val).__name__}")
 
+    errors.extend(validate_runtime_constraints(config))
     return errors, warnings
 
 
@@ -465,7 +481,10 @@ def _validate_nested(obj: dict, props: dict, prefix: str) -> tuple[list, list]:
 # ─── WRITE: output config files ────────────────────────────────────
 
 def _write_config_dir(site_id: str, common: dict, page_types: dict[str, dict]) -> str:
-    config_dir = os.path.join(WORKDIR, "config", site_id)
+    validate_site_id(site_id)
+    for page_type in page_types:
+        validate_identifier(page_type, "page type")
+    config_dir = os.path.join(writable_config_root(), site_id)
     os.makedirs(config_dir, exist_ok=True)
 
     # Add $schema marker
@@ -601,6 +620,11 @@ def main():
     parser.add_argument("--categories", default="", help="Comma-separated category names to extract (default: all)")
     args = parser.parse_args()
 
+    try:
+        validate_site_id(args.site)
+    except ValueError as error:
+        parser.error(str(error))
+
     # Resolve base_url
     base_url = args.base_url
     if not base_url:
@@ -677,7 +701,7 @@ def main():
     # --auto: just print and exit
     if args.auto:
         print(json.dumps(common, ensure_ascii=False, indent=2))
-        return
+        return 0
 
     # Check preset required_overrides even in non-interactive mode
     preset_required = PRESETS[preset_name].get("required_overrides", [])
@@ -713,16 +737,13 @@ def main():
     if errors:
         for e in errors:
             print(f"  ✗ {e}")
-        if not args.non_interactive:
-            fix = input("\n  Fix errors and continue? [y/N]: ").strip().lower()
-            if fix != "y":
-                print("  Aborted. Fix and re-run.")
-                sys.exit(1)
+        print("  Aborted. Fix and re-run.")
+        return 1
     else:
         print(f"  ✓ No errors, {len(warnings)} warning(s)")
 
     # Phase 6: Write
-    config_dir = os.path.join(WORKDIR, "config", site_id)
+    config_dir = os.path.join(writable_config_root(), site_id)
     if os.path.exists(config_dir) and not args.force:
         print(f"\n  ✗ {config_dir} already exists. Use --force to overwrite.")
         sys.exit(1)
@@ -742,10 +763,11 @@ def main():
     print(f"  Agent review required:")
     print(f"    1. Confirm scope and review config/{site_id}/common.json")
     print(f"    2. Cap discovery and keep the sample output under /tmp")
-    print(f"    3. Run a sample: python extract_generic.py --site {site_id}")
-    print(f"    4. Inspect Markdown and run quality_report.py before expanding scope")
+    print(f"    3. Run a sample: agentweb2md --site {site_id}")
+    print(f"    4. Inspect Markdown and run agentweb2md-quality before expanding scope")
     print(f"{'='*60}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

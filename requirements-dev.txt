@@ -3,3 +3,5 @@
 pytest==9.0.3
 bandit==1.9.4
 pip-audit==2.10.1
+build==1.5.0
+ruff==0.16.2

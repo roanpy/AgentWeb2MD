@@ -240,11 +240,11 @@ def main(argv=None):
     report = build_report(args.output_root, site=args.site, expect_specs=args.expect_specs, expect_resources=args.expect_resources)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
-        return report
-    paths = write_report(report, args.output_root)
-    print(f"Quality report: {paths[0]} {paths[1]}")
-    return report
+    else:
+        paths = write_report(report, args.output_root)
+        print(f"Quality report: {paths[0]} {paths[1]}")
+    return int(not report["agent_verdict"]["ok"])
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -171,7 +171,7 @@ def write_standard_docs(output_root: str, config: dict) -> dict[str, str]:
         "## 更新方式",
         "",
         "```bash",
-        f"python extract_generic.py --site {site_id or site_name.lower()} --page-type product",
+        f"agentweb2md --site {site_id or site_name.lower()} --page-type product",
         "```",
     ])
     readme.write_text("\n".join(readme_lines) + "\n", encoding="utf-8")

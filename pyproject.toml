@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentweb2md"
+version = "0.1.0"
+description = "Agent-guided web content extraction to clean, reviewable Markdown"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "roanpy"}]
+keywords = ["agent", "markdown", "web-extraction"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Text Processing :: Markup",
+]
+dependencies = [
+  "beautifulsoup4==4.15.0",
+  "markdownify==1.2.2",
+  "requests==2.34.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/roanpy/AgentWeb2MD"
+Issues = "https://github.com/roanpy/AgentWeb2MD/issues"
+Security = "https://github.com/roanpy/AgentWeb2MD/security/policy"
+
+[project.scripts]
+agentweb2md = "extract_generic:main"
+agentweb2md-config = "config_loop:main"
+agentweb2md-init = "init_site:main"
+agentweb2md-quality = "quality_report:main"
+
+[tool.setuptools]
+py-modules = [
+  "agentweb2md_paths",
+  "config_loop",
+  "config_schema",
+  "discovery_controls",
+  "extract_generic",
+  "hooks",
+  "http_utils",
+  "init_site",
+  "library_docs",
+  "quality_report",
+  "resource_utils",
+  "resources_output",
+  "specs_output",
+]
+
+[tool.setuptools.data-files]
+"share/agentweb2md/config/generic" = [
+  "config/generic/common.json",
+  "config/generic/product.json",
+]

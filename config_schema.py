@@ -1116,6 +1116,10 @@ CONFIG_SCHEMA_V1 = {
                     "type": "integer", "required": False, "default": 30,
                     "description": "Per-request timeout in seconds", "editor": "number",
                 },
+                "max_response_bytes": {
+                    "type": "integer", "required": False, "default": 26214400,
+                    "description": "Maximum bytes buffered from one HTTP response", "editor": "number",
+                },
             },
         },
 
@@ -1359,7 +1363,7 @@ CONFIG_SCHEMA_V1 = {
             "type": "object",
             "required": False,
             "default": {},
-            "description": "LLM-based post-processing (enabled via --llm-refine flag)",
+            "description": "LLM post-processing. Store only an API key environment-variable name in api_key_env; never put a key in config.",
             "editor": "json",
         },
 
@@ -1838,6 +1842,50 @@ def _check_type(value, expected) -> bool:
     py_type = type_map.get(expected)
     if py_type is None:
         return True
-    if expected == "number" and isinstance(value, int):
-        return True
+    if expected in {"integer", "number"} and isinstance(value, bool):
+        return False
     return isinstance(value, py_type)
+
+
+def validate_runtime_constraints(config: dict) -> list[str]:
+    """Validate security- and runtime-critical values not expressed by type checks."""
+    from agentweb2md_paths import validate_site_id
+
+    errors = []
+    site_id = config.get("site_id")
+    if isinstance(site_id, str) and site_id:
+        try:
+            validate_site_id(site_id)
+        except ValueError as error:
+            errors.append(f"site_id: {error}")
+
+    rate = config.get("rate_limit", {})
+    if isinstance(rate, dict):
+        constraints = {
+            "delay_between_requests": (0, "must be >= 0"),
+            "max_retries": (1, "must be >= 1"),
+            "retry_backoff_base": (1, "must be >= 1"),
+            "timeout": (1, "must be >= 1"),
+            "max_response_bytes": (1, "must be >= 1"),
+        }
+        for key, (minimum, message) in constraints.items():
+            value = rate.get(key)
+            expected = "number" if key in {"delay_between_requests", "retry_backoff_base"} else "integer"
+            if value is not None and not _check_type(value, expected):
+                errors.append(f"rate_limit.{key} must be a {expected}")
+            elif value is not None and value < minimum:
+                errors.append(f"rate_limit.{key} {message}")
+
+    discovery = config.get("discovery", {})
+    max_pages = discovery.get("max_pages") if isinstance(discovery, dict) else None
+    if isinstance(max_pages, int) and not isinstance(max_pages, bool) and max_pages < 0:
+        errors.append("discovery.max_pages must be >= 0")
+
+    llm = config.get("llm_refine", {})
+    llm_limit = llm.get("max_response_bytes") if isinstance(llm, dict) else None
+    if llm_limit is not None:
+        if not _check_type(llm_limit, "integer"):
+            errors.append("llm_refine.max_response_bytes must be an integer")
+        elif llm_limit < 1:
+            errors.append("llm_refine.max_response_bytes must be >= 1")
+    return errors

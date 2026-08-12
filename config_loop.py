@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from urllib.parse import urlparse
 
+from agentweb2md_paths import validate_identifier, validate_site_id, writable_config_root
 from extract_generic import load_config, validate_config
 from init_site import _probe_site, _generate_common_config, _select_preset, _infer_site_id, _infer_site_name
 from quality_report import build_report, write_report
@@ -20,7 +21,10 @@ def default_site(url):
 
 
 def write_config(site, common, page_types):
-    out_dir = os.path.join(os.path.dirname(__file__), "config", site)
+    validate_site_id(site)
+    for page_type in page_types:
+        validate_identifier(page_type, "page type")
+    out_dir = os.path.join(writable_config_root(), site)
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "common.json"), "w", encoding="utf-8") as f:
         json.dump(common, f, ensure_ascii=False, indent=2)
@@ -96,6 +100,16 @@ def main(argv=None):
     parser.add_argument("--sample-root", default="", help="existing sample output root to score")
     args = parser.parse_args(argv)
     site = args.site or default_site(args.url)
+    try:
+        validate_site_id(site)
+    except ValueError as error:
+        parser.error(str(error))
+    page_types = [p.strip() for p in args.page_types.split(",") if p.strip()]
+    try:
+        for page_type in page_types:
+            validate_identifier(page_type, "page type")
+    except ValueError as error:
+        parser.error(str(error))
     probe = _probe_site(args.url)
     preset = _select_preset(probe, None)
     common = _generate_common_config(
@@ -107,9 +121,11 @@ def main(argv=None):
         probe=probe,
     )
     common["output_root"] = common.get("output_root") or f"./output/{site}"
-    page_types = [p.strip() for p in args.page_types.split(",") if p.strip()]
     quality = build_report(args.sample_root, site=site) if args.sample_root else None
     report = build_validation_report(site, args.url, common, quality=quality)
+    if report["config_errors"]:
+        print(json.dumps({"common": common, "validation": report}, ensure_ascii=False, indent=2))
+        return 1
     if args.apply:
         write_config(site, common, page_types)
         if args.sample_root:
@@ -117,8 +133,9 @@ def main(argv=None):
         write_validation_report(report, common["output_root"])
     else:
         print(json.dumps({"common": common, "validation": report}, ensure_ascii=False, indent=2))
-    return report
+    sample_failed = quality and not quality.get("agent_verdict", {}).get("ok", False)
+    return int(bool(report["config_errors"]) or sample_failed)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -5,10 +5,10 @@
 **Agent-guided web content extraction to clean, reviewable Markdown.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+[![CI](https://github.com/roanpy/AgentWeb2MD/actions/workflows/ci.yml/badge.svg)](https://github.com/roanpy/AgentWeb2MD/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)
 ![Workflow](https://img.shields.io/badge/workflow-agent--guided-8a63d2.svg)
 ![Output](https://img.shields.io/badge/output-Markdown-1f6feb.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-555.svg)
 
 AgentWeb2MD pairs an agent's judgment with a deterministic extraction engine. The agent defines scope, reviews the site profile, checks a small sample, reads the quality report, and iterates before any full run.
 
@@ -52,9 +52,18 @@ Approve the full run
 
 ## Install
 
+From a source checkout:
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+Or install the wheel attached to a GitHub release:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install ./agentweb2md-0.1.0-py3-none-any.whl
 ```
 
 For JavaScript-rendered sites:
@@ -64,6 +73,19 @@ For JavaScript-rendered sites:
 .venv/bin/playwright install chromium
 ```
 
+Run the local checks with:
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+.venv/bin/python -m pip_audit --progress-spinner off
+.venv/bin/python -m bandit -q -lll -r . -x ./.git,./tests
+.venv/bin/python -m ruff check --select E9,F63,F7,F82 .
+.venv/bin/python -m build
+```
+
+Installation provides `agentweb2md`, `agentweb2md-init`, `agentweb2md-config`, and `agentweb2md-quality`. The original Python scripts remain supported when running from a checkout.
+
 ## Agent workflow
 
 Give your coding agent the target URL, desired content scope, exclusions, attachment policy, and quality threshold. The repository's `AGENTS.md` defines the operating contract.
@@ -71,7 +93,7 @@ Give your coding agent the target URL, desired content scope, exclusions, attach
 ### 1. Probe without writing
 
 ```bash
-.venv/bin/python init_site.py --site example --base-url https://example.com --auto
+.venv/bin/agentweb2md-init --site example --base-url https://example.com --auto
 ```
 
 The probe is evidence, not a final configuration. The agent must review the proposed discovery mode and selectors.
@@ -79,7 +101,7 @@ The probe is evidence, not a final configuration. The agent must review the prop
 ### 2. Create a draft profile
 
 ```bash
-.venv/bin/python init_site.py \
+.venv/bin/agentweb2md-init \
   --site example \
   --base-url https://example.com \
   --output-root /tmp/agentweb2md/example \
@@ -89,7 +111,7 @@ The probe is evidence, not a final configuration. The agent must review the prop
 Alternatively, print a draft plus validation suggestions without writing files:
 
 ```bash
-.venv/bin/python config_loop.py https://example.com --site example
+.venv/bin/agentweb2md-config https://example.com --site example
 ```
 
 ### 3. Review and validate
@@ -110,13 +132,13 @@ PY
 ### 4. Extract a sample
 
 ```bash
-.venv/bin/python extract_generic.py --site example
+.venv/bin/agentweb2md --site example
 ```
 
 ### 5. Score and inspect
 
 ```bash
-.venv/bin/python quality_report.py \
+.venv/bin/agentweb2md-quality \
   --output-root /tmp/agentweb2md/example \
   --site example
 ```
@@ -132,12 +154,14 @@ Only remove discovery caps or change the output destination after the sample pas
 `config/generic` is a safe explicit-URL-list starting point. Edit `discovery.urls`; it does not recursively crawl links.
 
 ```bash
-.venv/bin/python extract_generic.py --site generic
+.venv/bin/agentweb2md --site generic
 ```
 
 Output defaults to `/tmp/generic_url_list_sample`.
 
-Generated `_baseline*.json` and `_quality_baseline.json` files are local state and are ignored by Git.
+Site profiles are read from `./config` by default; set `AGENTWEB2MD_CONFIG_DIR` to use another writable profile directory. Baselines and checkpoints are stored under `./.agentweb2md`; set `AGENTWEB2MD_STATE_DIR` to move that local state.
+
+Extraction and quality commands return a non-zero exit status when discovery is empty, an item fails, or the quality gate fails, so an agent or CI job can stop reliably. HTTP responses are capped at 25 MiB by default; adjust the positive `rate_limit.max_response_bytes` value only for reviewed sites that need it.
 
 ## Responsible use
 
@@ -146,3 +170,5 @@ Only extract content you are authorized to access and reuse. Respect site terms,
 ## License
 
 MIT
+
+Security issues should be reported privately as described in [SECURITY.md](SECURITY.md).

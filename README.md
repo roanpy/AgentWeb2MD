@@ -1,5 +1,7 @@
 # 🔗 AgentWeb2MD
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 **Agent-guided web content extraction to clean, reviewable Markdown.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)

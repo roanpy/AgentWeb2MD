@@ -69,6 +69,8 @@ Run the local checks with:
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
+.venv/bin/python -m pip_audit --progress-spinner off
+.venv/bin/python -m bandit -q -lll -r . -x ./.git,./tests
 ```
 
 ## Agent workflow

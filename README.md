@@ -1,8 +1,18 @@
-# AgentWeb2MD
+# 🔗 AgentWeb2MD
 
-An agent-guided Markdown extraction toolkit.
+**Agent-guided web content extraction to clean, reviewable Markdown.**
 
-AgentWeb2MD is not a one-click autonomous crawler. A coding agent inspects the target site, defines the extraction scope, reviews or edits a site profile, runs a small sample, reads the quality report, and iterates. The Python tools provide deterministic discovery, HTML-to-Markdown conversion, resource/spec sidecars, and quality checks.
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.10%2B-3776ab.svg)
+![Workflow](https://img.shields.io/badge/workflow-agent--guided-8a63d2.svg)
+![Output](https://img.shields.io/badge/output-Markdown-1f6feb.svg)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-555.svg)
+
+AgentWeb2MD pairs an agent's judgment with a deterministic extraction engine. The agent defines scope, reviews the site profile, checks a small sample, reads the quality report, and iterates before any full run.
+
+[Why agent-guided?](#why-agent-guided) · [Capabilities](#capabilities) · [Install](#install) · [Agent workflow](#agent-workflow) · [Responsible use](#responsible-use)
+
+> This is deliberately not a one-click autonomous crawler. Website scope, selectors, noise rules, and output quality require review.
 
 ## Why agent-guided?
 

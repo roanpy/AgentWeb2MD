@@ -1,0 +1,68 @@
+{
+  "$schema": "webextract-config/v1",
+  "site_id": "generic",
+  "site_name": "Generic URL List",
+  "base_url": "https://example.com",
+  "output_root": "/tmp/generic_url_list_sample",
+  "locale": "zh-CN",
+  "discovery": {
+    "mode": "url_list",
+    "max_pages": 50,
+    "urls": [
+      {
+        "url": "https://example.com",
+        "title": "Example Domain",
+        "category": "Samples"
+      }
+    ]
+  },
+  "render_mode": "requests",
+  "extraction": {
+    "entity_types": [
+      "product"
+    ]
+  },
+  "html_components": {
+    "content_selector": "main, article, [role='main'], body",
+    "download_images": false
+  },
+  "content_blocks": [
+    "body_html"
+  ],
+  "filters": {
+    "image_ignore_keywords": [
+      "logo",
+      "icon",
+      "banner",
+      "sprite",
+      "placeholder",
+      "footer",
+      "header",
+      "btn"
+    ]
+  },
+  "output_structure": {
+    "products_dir": "pages",
+    "solutions_dir": "solutions",
+    "image_subdir": "images",
+    "resource_subdir": "resources",
+    "subproduct_mode": "merge"
+  },
+  "document": {
+    "generate_index": true,
+    "generate_summary": true,
+    "generate_toc": false
+  },
+  "templates": {
+    "block_separator": "\n\n---\n\n",
+    "extract_time_footer": "\n\n> Extracted: {date} | Source: {url}"
+  },
+  "web_fallback": {
+    "enabled": true
+  },
+  "rate_limit": {
+    "delay_between_requests": 0,
+    "max_retries": 3,
+    "retry_backoff_base": 2
+  }
+}

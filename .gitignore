@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+_baseline*.json
+_quality_baseline.json
+_download_checkpoint.json
+_init_checkpoint.json
+output/

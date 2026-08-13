@@ -15,11 +15,16 @@ from extract_generic import (
     download_image,
     detect_changes,
     load_config,
+    load_baseline,
+    refresh_baseline,
+    save_baseline,
     sanitize,
     validate_config,
 )
 from agentweb2md_paths import validate_site_id
+from config_schema import normalize_entity_types
 from http_utils import ResponseTooLarge
+from init_site import _infer_url_patterns
 from library_docs import write_standard_docs
 from quality_report import build_report
 
@@ -178,6 +183,102 @@ def test_config_rejects_invalid_section_type():
     assert "html_components must be an object, got list" in errors
 
 
+def test_config_rejects_empty_required_values_and_non_http_base_url():
+    config = load_config(str(ROOT / "config" / "generic" / "common.json"), page_type="product")
+    config["site_id"] = ""
+    config["base_url"] = "file:///etc/passwd"
+    config["output_root"] = ""
+    errors, _warnings = validate_config(config)
+    assert "'site_id' is required but missing or empty" in errors
+    assert "base_url must be an absolute HTTP(S) URL" in errors
+    assert "'output_root' is required but missing or empty" in errors
+
+    config["site_id"] = "generic"
+    config["base_url"] = "https://user:password@example.com"
+    config["output_root"] = "/tmp/example"
+    errors, _warnings = validate_config(config)
+    assert "base_url must not contain embedded credentials" in errors
+
+
+def test_config_rejects_invalid_nested_values():
+    config = load_config(str(ROOT / "config" / "generic" / "common.json"), page_type="product")
+    config["discovery"]["mode"] = "automatic"
+    config["discovery"]["urls"] = [{"title": "Missing URL"}]
+    config["discovery"]["url_include_patterns"] = ["("]
+    errors, _warnings = validate_config(config)
+    assert "'discovery.mode' contains unsupported value 'automatic'" in errors
+    assert "'discovery.urls[0].url' is required but missing or empty" in errors
+    assert any(error.startswith("discovery.url_include_patterns is not a valid regular expression") for error in errors)
+
+
+def test_config_file_root_must_be_an_object(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text("[]", encoding="utf-8")
+    try:
+        load_config(str(config_path))
+    except ValueError as error:
+        assert "Config root must be a JSON object" in str(error)
+    else:
+        raise AssertionError("non-object config must be rejected")
+
+
+def test_url_list_accepts_string_entries():
+    config = load_config(str(ROOT / "config" / "generic" / "common.json"), page_type="product")
+    config["discovery"]["urls"] = ["https://example.com/page"]
+    errors, _warnings = validate_config(config)
+    assert errors == []
+
+
+def test_solution_discovery_uses_industry_pipeline():
+    probe = {
+        "base_url": "https://example.com",
+        "sample_urls": {
+            "product": [],
+            "industry": [],
+            "solution": ["https://example.com/solutions/cloud/example"],
+        },
+    }
+    assert _infer_url_patterns(probe)["industry_pattern"] == "/solutions/"
+    assert normalize_entity_types(["product", "solution", "industry"]) == ["product", "industry"]
+
+
+def test_legacy_solution_profile_loads_as_industry(tmp_path):
+    common = json.loads((ROOT / "config" / "generic" / "common.json").read_text(encoding="utf-8"))
+    (tmp_path / "common.json").write_text(json.dumps(common), encoding="utf-8")
+    (tmp_path / "solution.json").write_text('{"page_type": "solution"}', encoding="utf-8")
+    config = load_config(str(tmp_path / "common.json"), page_type="industry")
+    assert config["page_type"] == "solution"
+    assert config["__engine_page_type"] == "industry"
+
+
+def test_baseline_round_trip_preserves_numeric_item_identity(tmp_path, monkeypatch):
+    path = tmp_path / "baseline.json"
+    config = {}
+    monkeypatch.setattr("extract_generic.fetch_product_detail", lambda *_args: {"html": "same"})
+    assert refresh_baseline([("product", 42, "Example", "", {})], config, str(path)) == []
+    state = load_baseline(str(path))
+    assert "42" in state["products"]
+    monkeypatch.setattr("extract_generic.fetch_menu", lambda _config: {
+        "productTypeList": [{"children": [{"id": 42, "name": "Example"}]}],
+        "industryList": [],
+    })
+    changes = detect_changes(state, config)
+    assert changes == {"new": [], "changed": [], "errors": []}
+
+
+def test_atomic_baseline_write_keeps_previous_state_on_serialization_error(tmp_path):
+    path = tmp_path / "baseline.json"
+    path.write_text('{"stable": true}', encoding="utf-8")
+    try:
+        save_baseline({"bad": object()}, str(path))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("invalid state must fail serialization")
+    assert json.loads(path.read_text(encoding="utf-8")) == {"stable": True}
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
 def test_child_discovery_resolves_relative_url_and_rejects_external(monkeypatch):
     from bs4 import BeautifulSoup
 
@@ -282,6 +383,31 @@ def test_cli_returns_failure_when_an_item_fails(tmp_path, monkeypatch):
     from extract_generic import main
 
     assert main(["--config", str(config_path)]) == 1
+
+
+def test_cli_uses_configured_industries_directory(tmp_path, monkeypatch):
+    config_path = tmp_path / "common.json"
+    config = json.loads((ROOT / "config" / "generic" / "common.json").read_text(encoding="utf-8"))
+    config["output_root"] = str(tmp_path / "output")
+    config["output_structure"]["industries_dir"] = "industries"
+    config["extraction"]["entity_types"] = ["industry"]
+    config["document"] = {"generate_index": False, "generate_summary": False}
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    (tmp_path / "industry.json").write_text('{"page_type": "industry"}', encoding="utf-8")
+
+    captured = {}
+    monkeypatch.setattr("extract_generic.collect_all_items", lambda _config: [
+        ("industry", "1", "Example", "Cloud", {}),
+    ])
+    monkeypatch.setattr(
+        "extract_generic.extract_industry",
+        lambda *_args, **kwargs: captured.setdefault("save_dir", kwargs["save_dir"]) and "# Example",
+    )
+
+    from extract_generic import main
+
+    assert main(["--config", str(config_path)]) == 0
+    assert Path(captured["save_dir"]).relative_to(config["output_root"]).parts[0] == "industries"
 
 
 def test_incremental_changes_are_extractable_items(monkeypatch):

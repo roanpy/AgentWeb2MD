@@ -48,6 +48,13 @@ jobs:
           agentweb2md-config --help
           agentweb2md-init --help
           agentweb2md-quality --help
+          python - <<'PY'
+          from agentweb2md_paths import site_config_dir
+          from extract_generic import load_config
+
+          config_dir = site_config_dir("generic")
+          assert load_config(str(config_dir / "common.json"), page_type="product")["site_id"] == "generic"
+          PY
 
   security:
     runs-on: ubuntu-latest

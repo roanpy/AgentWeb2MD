@@ -63,7 +63,7 @@ python3 -m venv .venv
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install ./agentweb2md-0.1.0-py3-none-any.whl
+.venv/bin/pip install ./agentweb2md-0.1.1-py3-none-any.whl
 ```
 
 如需提取 JavaScript 渲染的网站：

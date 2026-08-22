@@ -15,6 +15,10 @@ This schema is the SINGLE SOURCE OF TRUTH for what the engine accepts.
 extract_generic.py's old _CONFIG_SCHEMA / _CONFIG_LIST_KEYS are superseded.
 """
 
+import os
+import re
+from urllib.parse import urlparse
+
 SCHEMA_VERSION = 1
 
 # ─── Field definition ───────────────────────────────────────────────
@@ -119,7 +123,7 @@ CONFIG_SCHEMA_V1 = {
                     "description": "Static URL list for url_list mode; each item may include url, title/name, and category.",
                     "editor": "json",
                     "items": {
-                        "type": "object",
+                        "type": ["string", "object"],
                         "properties": {
                             "url": {"type": "string", "required": True, "editor": "url"},
                             "title": {"type": "string", "required": False, "editor": "text"},
@@ -1773,43 +1777,6 @@ def _schema_keys_at(path: str) -> set:
     return set(current.keys())
 
 
-def _list_keys_at(path: str) -> set:
-    """Return keys at path that should be lists (array type)."""
-    props = CONFIG_SCHEMA_V1["properties"]
-    if not path:
-        return set()
-    parts = path.split(".")
-    current = props
-    for part in parts:
-        field = current.get(part, {})
-        if "properties" in field:
-            current = field["properties"]
-        else:
-            return set()
-    result = set()
-    for key, schema in current.items():
-        t = schema.get("type")
-        if t == "array" or (isinstance(t, list) and "array" in t):
-            result.add(key)
-    return result
-
-
-def _required_keys_at(path: str) -> set:
-    """Return keys at path that are required."""
-    props = CONFIG_SCHEMA_V1["properties"]
-    if not path:
-        return {k for k, v in props.items() if v.get("required")}
-    parts = path.split(".")
-    current = props
-    for part in parts:
-        field = current.get(part, {})
-        if "properties" in field:
-            current = field["properties"]
-        else:
-            return set()
-    return {k for k, v in current.items() if v.get("required")}
-
-
 def _field_schema(dotpath: str) -> dict:
     """Get the schema definition for a dot-path like 'filters.noise_text_keywords_exact'."""
     props = CONFIG_SCHEMA_V1["properties"]
@@ -1847,6 +1814,70 @@ def _check_type(value, expected) -> bool:
     return isinstance(value, py_type)
 
 
+def normalize_entity_types(values: list[str]) -> list[str]:
+    """Normalize the ``solution`` label to the industry runtime pipeline."""
+    return list(dict.fromkeys("industry" if value == "solution" else value for value in values))
+
+
+def validate_config_schema(config: dict) -> tuple[list[str], list[str]]:
+    """Validate config values against the formal schema and runtime boundaries."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    _validate_schema_object(config, CONFIG_SCHEMA_V1["properties"], "", errors, warnings)
+    errors.extend(validate_runtime_constraints(config))
+    return list(dict.fromkeys(errors)), list(dict.fromkeys(warnings))
+
+
+def _validate_schema_object(
+    value: dict,
+    properties: dict,
+    prefix: str,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    for key, field in properties.items():
+        current = value.get(key)
+        if field.get("required") and (
+            key not in value or current is None or (isinstance(current, str) and not current.strip())
+        ):
+            errors.append(f"'{prefix}{key}' is required but missing or empty")
+
+    for key, current in value.items():
+        if key.startswith(("$", "__")):
+            continue
+        path = f"{prefix}{key}"
+        field = properties.get(key)
+        if field is None:
+            warnings.append(f"Unknown key '{path}'")
+            continue
+        expected = field.get("type")
+        if expected and current is not None and not _check_type(current, expected):
+            if expected == "object":
+                errors.append(f"{path} must be an object, got {type(current).__name__}")
+            elif expected == "array":
+                errors.append(f"{path} must be a list, got {type(current).__name__}")
+            else:
+                errors.append(f"{path} expected type {expected}, got {type(current).__name__}")
+            continue
+        allowed = field.get("enum")
+        if allowed and current is not None:
+            candidates = current if isinstance(current, list) else [current]
+            invalid = [item for item in candidates if item not in allowed]
+            if invalid:
+                errors.append(f"'{path}' contains unsupported value {invalid[0]!r}")
+        if isinstance(current, dict) and "properties" in field:
+            _validate_schema_object(current, field["properties"], f"{path}.", errors, warnings)
+        elif isinstance(current, list) and isinstance(field.get("items"), dict):
+            item_schema = field["items"]
+            for index, item in enumerate(current):
+                item_path = f"{path}[{index}]"
+                item_type = item_schema.get("type")
+                if item_type and not _check_type(item, item_type):
+                    errors.append(f"{item_path} expected type {item_type}, got {type(item).__name__}")
+                elif isinstance(item, dict) and "properties" in item_schema:
+                    _validate_schema_object(item, item_schema["properties"], f"{item_path}.", errors, warnings)
+
+
 def validate_runtime_constraints(config: dict) -> list[str]:
     """Validate security- and runtime-critical values not expressed by type checks."""
     from agentweb2md_paths import validate_site_id
@@ -1858,6 +1889,27 @@ def validate_runtime_constraints(config: dict) -> list[str]:
             validate_site_id(site_id)
         except ValueError as error:
             errors.append(f"site_id: {error}")
+
+    base_url = config.get("base_url")
+    if isinstance(base_url, str) and base_url.strip():
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            errors.append("base_url must be an absolute HTTP(S) URL")
+        elif parsed.username or parsed.password:
+            errors.append("base_url must not contain embedded credentials")
+
+    output_structure = config.get("output_structure", {})
+    if isinstance(output_structure, dict):
+        for key in ("products_dir", "solutions_dir", "industries_dir", "image_subdir", "resource_subdir"):
+            value = output_structure.get(key)
+            if isinstance(value, str) and value and (
+                os.path.isabs(value) or ".." in value.replace("\\", "/").split("/")
+            ):
+                errors.append(f"output_structure.{key} must stay relative to output_root")
+
+    llm = config.get("llm_refine", {})
+    if isinstance(llm, dict) and "api_key" in llm:
+        errors.append("llm_refine.api_key is not allowed; use api_key_env")
 
     rate = config.get("rate_limit", {})
     if isinstance(rate, dict):
@@ -1881,7 +1933,19 @@ def validate_runtime_constraints(config: dict) -> list[str]:
     if isinstance(max_pages, int) and not isinstance(max_pages, bool) and max_pages < 0:
         errors.append("discovery.max_pages must be >= 0")
 
-    llm = config.get("llm_refine", {})
+    if isinstance(discovery, dict):
+        patterns = []
+        for key in ("url_include_patterns", "url_exclude_patterns"):
+            patterns.extend((key, pattern) for pattern in discovery.get(key, []) if isinstance(pattern, str))
+        category_rule = discovery.get("url_category_rule")
+        if isinstance(category_rule, dict) and isinstance(category_rule.get("pattern"), str):
+            patterns.append(("url_category_rule.pattern", category_rule["pattern"]))
+        for key, pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                errors.append(f"discovery.{key} is not a valid regular expression: {error}")
+
     llm_limit = llm.get("max_response_bytes") if isinstance(llm, dict) else None
     if llm_limit is not None:
         if not _check_type(llm_limit, "integer"):

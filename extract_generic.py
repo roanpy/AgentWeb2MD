@@ -11,10 +11,11 @@
   python extract_generic.py --check               # 仅检测变更
   python extract_generic.py --init                # 初始化基线指纹(分批+断点续传)
 """
-import os, re, sys, json, hashlib, argparse, time
+import os, re, sys, json, hashlib, argparse, time, tempfile
 from urllib.parse import urlparse, parse_qs, urljoin as _urljoin_std
 
 from agentweb2md_paths import site_config_dir, state_file, validate_identifier, validate_site_id
+from config_schema import normalize_entity_types, validate_config_schema
 from http_utils import DEFAULT_MAX_RESPONSE_BYTES, ResponseTooLarge, buffer_response
 
 
@@ -39,12 +40,6 @@ try:
 except ImportError as e:
     print(f"缺少依赖: {e}\n请: pip install requests beautifulsoup4 markdownify"); sys.exit(1)
 
-from resource_utils import (
-    decide_save_dir,
-    build_category_root_res,
-    sanitize_filename,
-    parse_download_table,
-)
 from discovery_controls import apply_discovery_controls
 from hooks import apply_hooks
 from resources_output import record_resource, write_resources_output
@@ -54,7 +49,6 @@ DEFAULT_SITE = os.environ.get("WEM_SITE", "generic")
 DEFAULT_CONFIG = str(site_config_dir(DEFAULT_SITE) / "common.json")
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
-DOWNLOADED_IMG_MD5 = {}
 DOWNLOADED_RES_MD5 = {}
 
 _last_request_time = 0.0
@@ -193,7 +187,6 @@ def _fetch_with_playwright(url, config):
 
 def discover_page_types(config_dir):
     """Discover available page types by globbing config dir for *.json (excluding common.json and _*.json)."""
-    import glob as _glob
     types = []
     for f in sorted(os.listdir(config_dir)):
         if f.endswith(".json") and f != "common.json" and not f.startswith("_"):
@@ -212,7 +205,10 @@ def _reject_duplicate_json_keys(pairs):
 
 def _load_json_config(path):
     with open(path, encoding="utf-8") as f:
-        return json.loads(f.read(), object_pairs_hook=_reject_duplicate_json_keys)
+        config = json.loads(f.read(), object_pairs_hook=_reject_duplicate_json_keys)
+    if not isinstance(config, dict):
+        raise ValueError(f"Config root must be a JSON object: {path}")
+    return config
 
 
 def load_config(path, page_type=None):
@@ -222,13 +218,19 @@ def load_config(path, page_type=None):
     If page_type is None, load path as-is (for standalone configs).
     """
     config_dir = os.path.dirname(path)
-    base_name = os.path.basename(path)
 
     # New split config: common.json + {page_type}.json
     if page_type:
         validate_identifier(page_type, "page type")
+        runtime_type = "industry" if page_type == "solution" else page_type
+        profile_names = [page_type]
+        if runtime_type == "industry":
+            profile_names.extend(name for name in ("industry", "solution") if name not in profile_names)
         common_path = os.path.join(config_dir, "common.json")
-        type_path = os.path.join(config_dir, f"{page_type}.json")
+        type_path = next(
+            (os.path.join(config_dir, f"{name}.json") for name in profile_names if os.path.exists(os.path.join(config_dir, f"{name}.json"))),
+            os.path.join(config_dir, f"{page_type}.json"),
+        )
         if not os.path.exists(common_path):
             raise FileNotFoundError(f"通用配置不存在: {common_path}")
         if not os.path.exists(type_path):
@@ -238,7 +240,7 @@ def load_config(path, page_type=None):
         # Merge: type_cfg overrides config (replace semantics for lists)
         _deep_merge(config, type_cfg)
         # Store page_type in config for downstream use (namespaced to avoid collision)
-        config["__engine_page_type"] = page_type
+        config["__engine_page_type"] = runtime_type
         errors, warnings = validate_config(config)
         if errors:
             print("❌ 配置错误:")
@@ -317,14 +319,11 @@ def _escape_table_pipes(md: str, empty_header_fill: str = " 描述 ") -> str:
 
         # Detect table start: pipe-delimited line with at least 2 columns
         if stripped.startswith('|') and stripped.endswith('|') and stripped.count('|') >= 3:
-            table_start = i
             # Look ahead for separator row to determine column count
-            sep_idx = None
             ncols = None
             if i + 1 < len(lines):
                 next_s = lines[i + 1].strip()
                 if next_s.startswith('|') and '---' in next_s:
-                    sep_idx = i + 1
                     ncols = next_s.count('|') - 1  # | a | b | → 2 pipes interior = 2 cols
 
             if ncols is not None:
@@ -765,7 +764,6 @@ def _merge_alternating_pairs(md: str, pair_table_header: str = "| 型号 | 描�
     result = []
     i = 0
     while i < len(lines):
-        run_start = i
         pairs = []
         j = i
         while j < len(lines):
@@ -1034,10 +1032,6 @@ def _strip_image_alt_echoes(md: str) -> str:
 def _strip_resource_card_sections(md: str) -> str:
     resource_headings = {"观看", "收听", "阅读", "Watch", "Listen", "Read"}
     resource_section_re = re.compile(r"^#{1,6}\s+.*资源\s*$")
-    resource_card_re = re.compile(
-        r"^\[!\[.*\]\(.+\).*?(?:###\s*(?:观看|收听|阅读|Watch|Listen|Read)\b|\*\*(?:点播式网络研讨会|点播网络研讨会|Podcast|White paper)\*\*)",
-        re.IGNORECASE,
-    )
     ui_noise_re = re.compile(r"按服务探索|按子行业探索|按数字主线探索|Explore by \w+(?:\s+\w+)*", re.IGNORECASE)
     ui_cell_re = re.compile(r"\|\s*Select\.\.\.\s*\|")
     lines = md.split('\n')
@@ -1197,67 +1191,6 @@ def _normalize_config(config):
     return normalized
 
 
-# Legacy _CONFIG_SCHEMA / _CONFIG_LIST_KEYS / _DEAD_CONFIG_KEYS kept for backward compat.
-# The formal schema is now in config_schema.py — validate_config uses it.
-# These sets are kept so that any code referencing them directly still works.
-try:
-    from config_schema import _schema_keys_at, _list_keys_at, SCHEMA_VERSION as _SCHEMA_V
-    _CONFIG_SCHEMA = {
-        "": _schema_keys_at(""),
-        "filters": _schema_keys_at("filters"),
-        "html_components": _schema_keys_at("html_components"),
-        "discovery_quality": _schema_keys_at("discovery_quality"),
-    }
-    _CONFIG_LIST_KEYS = {
-        "filters": _list_keys_at("filters"),
-        "html_components": _list_keys_at("html_components"),
-        "discovery_quality": _list_keys_at("discovery_quality"),
-    }
-except ImportError:
-    # Fallback: keep old static sets if config_schema not available
-    _CONFIG_SCHEMA = {
-        "": {
-            "__engine_page_type", "api", "base_url", "carousel_mode", "content_blocks",
-            "discovery", "discovery_quality", "document", "download_link_patterns", "extract_date", "field_mapping",
-            "filters", "heading", "html_components", "lang", "lang_path",
-            "output_root", "output_structure", "page_type", "page_types", "playwright_args", "rate_limit",
-            "render_mode", "resources", "category_name_map", "site_id", "site_name", "templates", "web_fallback",
-            "locale", "llm_refine", "extraction",
-        },
-        "filters": {
-            "banned_images_md5", "cross_industry_exempt", "cross_industry_pollution_keywords",
-            "dev_pollution_patterns", "external_link_restore", "image_ignore_keywords",
-            "noise_prefix_chars", "noise_text_keywords_exact", "resource_shared_keywords",
-            "strip_resource_card_sections",
-        },
-        "html_components": {
-            "base_heading_level", "boilerplate_class_exceptions", "boilerplate_disable",
-            "carousel", "carousel_image_selector", "carousel_mode", "collapse", "collapse_header",
-            "contact_block_selector", "content_selector",
-            "decompose_selectors", "download_images", "download_link_patterns",
-            "download_tab_labels", "empty_header_fill", "image_name_fallback", "image_name_pattern",
-            "pair_table_header", "related_tab_labels", "card_grid_selector",
-            "tab_container", "tab_header_to_decompose", "tab_label", "tab_panel",
-            "visual_heading_pattern", "tab_heading_level", "collapse_heading_level",
-            "layout_table_heading_level", "related_product_wiki_template",
-        },
-        "discovery_quality": {
-            "archive_chars", "review_chars", "slug_title_max_chars", "slug_title_pattern",
-        },
-    }
-    _CONFIG_LIST_KEYS = {
-        "filters": {
-            "banned_images_md5", "cross_industry_exempt", "cross_industry_pollution_keywords",
-            "dev_pollution_patterns", "image_ignore_keywords", "noise_prefix_chars",
-            "noise_text_keywords_exact", "resource_shared_keywords",
-        },
-        "html_components": {
-            "boilerplate_class_exceptions", "decompose_selectors", "download_link_patterns",
-            "download_tab_labels", "related_tab_labels", "tab_header_to_decompose",
-        },
-        "discovery_quality": set(),
-    }
-
 _DEAD_CONFIG_KEYS = {
     "filters": {"news_image_keywords", "noise_text_patterns"},
     "": {"related_products"},
@@ -1277,19 +1210,6 @@ def validate_config(config):
     errors = []
     warnings = []
 
-    # ── Required keys (from formal schema) ─────────────────────
-    if "base_url" not in config:
-        errors.append("Missing 'base_url' — needed for image/resource URL resolution")
-    if "output_root" not in config:
-        errors.append("Missing 'output_root' — needed to know where to write output")
-
-    output_structure = config.get("output_structure", {})
-    if isinstance(output_structure, dict):
-        for key in ("products_dir", "solutions_dir", "industries_dir", "image_subdir", "resource_subdir"):
-            value = output_structure.get(key)
-            if value and (os.path.isabs(value) or ".." in value.replace("\\", "/").split("/")):
-                errors.append(f"output_structure.{key} must stay relative to output_root")
-
     # ── Common misspellings ─────────────────────────────────────
     misspellings = {
         "content_selectror": "content_selector",
@@ -1303,68 +1223,9 @@ def validate_config(config):
         if wrong in config:
             errors.append(f"Misspelled key '{wrong}' — should be '{right}'")
 
-    # ── render_mode validation ──────────────────────────────────
-    render_mode = config.get("render_mode", "requests")
-    if render_mode not in ("requests", "playwright", "auto"):
-        errors.append(f"Invalid render_mode '{render_mode}' — must be 'requests', 'playwright', or 'auto'")
-
-    if isinstance(config.get("llm_refine"), dict) and "api_key" in config["llm_refine"]:
-        errors.append("llm_refine.api_key is not allowed; use api_key_env")
-
-    # ── content_selector type check ─────────────────────────────
-    comp = config.get("html_components", {})
-    sel = comp.get("content_selector", "") if isinstance(comp, dict) else ""
-    if sel and not isinstance(sel, str):
-        errors.append(f"content_selector must be a string, got {type(sel).__name__}")
-
-    # ── Schema-based unknown key detection ──────────────────────
-    for key in config:
-        if key.startswith("$") or key.startswith("__"):
-            continue  # $schema, __engine_page_type — internal/optional
-        if key not in _CONFIG_SCHEMA.get("", set()):
-            warnings.append(f"Unknown top-level config key '{key}' (not in schema)")
-
-    for section in ("filters", "html_components", "discovery_quality"):
-        section_value = config.get(section, {})
-        if not isinstance(section_value, dict):
-            errors.append(f"{section} must be an object, got {type(section_value).__name__}")
-            continue
-        for key, value in section_value.items():
-            if key not in _CONFIG_SCHEMA.get(section, set()):
-                warnings.append(f"Unknown config key '{section}.{key}' (not in schema)")
-            if key in _CONFIG_LIST_KEYS.get(section, set()) and not isinstance(value, list):
-                errors.append(f"{section}.{key} must be a list, got {type(value).__name__}")
-
-    # ── Deep type validation using formal schema (if available) ─
-    try:
-        from config_schema import CONFIG_SCHEMA_V1, _check_type, validate_runtime_constraints
-        schema_props = CONFIG_SCHEMA_V1["properties"]
-        for key, value in config.items():
-            field = schema_props.get(key)
-            expected = field.get("type") if field else None
-            if expected and value is not None and not _check_type(value, expected):
-                errors.append(f"{key} expected type {expected}, got {type(value).__name__}")
-        # Check discovery sub-keys
-        disc = config.get("discovery", {})
-        disc_schema = schema_props.get("discovery", {}).get("properties", {})
-        for k, v in disc.items() if isinstance(disc, dict) else ():
-            if k in disc_schema:
-                expected = disc_schema[k].get("type")
-                if expected and v is not None and not _check_type(v, expected):
-                    errors.append(f"discovery.{k} expected type {expected}, got {type(v).__name__}")
-            elif k not in ("url_category_rule",):
-                warnings.append(f"Unknown discovery key '{k}'")
-        # Check output_structure sub-keys
-        out = config.get("output_structure", {})
-        out_schema = schema_props.get("output_structure", {}).get("properties", {})
-        for k, v in out.items() if isinstance(out, dict) else ():
-            if k in out_schema:
-                expected = out_schema[k].get("type")
-                if expected and v is not None and not _check_type(v, expected):
-                    errors.append(f"output_structure.{k} expected type {expected}, got {type(v).__name__}")
-        errors.extend(validate_runtime_constraints(config))
-    except ImportError:
-        pass  # config_schema not available, skip deep validation
+    schema_errors, schema_warnings = validate_config_schema(config)
+    errors.extend(schema_errors)
+    warnings.extend(schema_warnings)
 
     # ── Dead key detection ──────────────────────────────────────
     for section, keys in _DEAD_CONFIG_KEYS.items():
@@ -1971,10 +1832,6 @@ def convert_html_to_md(html, config, image_dir=None, current_name="", module_nam
         if is_layout:
             # Flatten: each cell becomes content, short cells become headings
             rows = table.find_all("tr")
-            # Detect 2-row pattern: row0=short title, row1=long content
-            is_title_content = (len(rows) == 2 and
-                max(len(c.get_text(strip=True)) for c in rows[0].find_all(["td","th"])) <= 30 and
-                max(len(c.get_text(strip=True)) for c in rows[1].find_all(["td","th"])) > 100)
             cell_parts = []
             heading_level = layout_table_level
             for row_i, row in enumerate(rows):
@@ -3408,9 +3265,6 @@ def extract_industry(iid, name, config, save_dir=None):
 
 
 
-# 使用 resource_utils.decide_save_dir
-
-
 def download_resource(url, save_dir, name, config, current_name=""):
     if not url: return ""
     base = config["base_url"]
@@ -3483,15 +3337,34 @@ def load_baseline(path):
 
 
 def save_baseline(state, path):
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f: json.dump(state, f, ensure_ascii=False, indent=2)
+    _save_json_state(state, path)
+
+
+def _save_json_state(state, path):
+    target = os.path.abspath(path)
+    directory = os.path.dirname(target)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{os.path.basename(target)}.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, target)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def merge_baseline_item(baseline, kind, pid, updates):
     kkey = kind_key(kind)
-    existing = baseline.get(kkey, {}).get(pid, {})
+    pid_key = str(pid)
+    existing = baseline.get(kkey, {}).get(pid_key, {})
     existing.update({k: v for k, v in updates.items() if v is not None})
-    baseline.setdefault(kkey, {})[pid] = existing
+    baseline.setdefault(kkey, {})[pid_key] = existing
     return existing
 
 
@@ -3506,7 +3379,7 @@ def detect_changes(state, config):
             try:
                 pid = p.get(fm(config, "item_id", "id"))
                 fp = text_fp(fm_get(fetch_product_detail(pid, config), config, "product_html", ""))
-                base = state["products"].get(pid, {})
+                base = state["products"].get(str(pid), {})
                 name = p.get(fm(config, "item_name", "name"), "")
                 if not base: changes["new"].append(("product", pid, name, "", p))
                 elif base.get("fp") != fp: changes["changed"].append(("product", pid, name, "", p))
@@ -3516,7 +3389,7 @@ def detect_changes(state, config):
         try:
             iid = ind.get(fm(config, "item_id", "id"))
             fp = text_fp(fm_get(fetch_industry_detail(iid, config), config, "industry_html", ""))
-            base = state["industries"].get(iid, {})
+            base = state["industries"].get(str(iid), {})
             name = ind.get(fm(config, "item_name", "name"), "")
             if not base: changes["new"].append(("industry", iid, name, "", ind))
             elif base.get("fp") != fp: changes["changed"].append(("industry", iid, name, "", ind))
@@ -3534,7 +3407,7 @@ def refresh_baseline(items, config, path):
                 html = fm_get(fetch_product_detail(pid, config), config, "product_html", "")
             else:
                 html = fm_get(fetch_industry_detail(pid, config), config, "industry_html", "")
-            state[kind_key(kind)][pid] = {"name": name, "category": cat, "fp": text_fp(html)}
+            state[kind_key(kind)][str(pid)] = {"name": name, "category": cat, "fp": text_fp(html)}
         except Exception as e:
             errors.append((kind, pid, name, str(e)))
     save_baseline(state, path)
@@ -3549,9 +3422,7 @@ def load_init_checkpoint(path):
 
 
 def save_init_checkpoint(state, path):
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    _save_json_state(state, path)
 
 
 def collect_all_items(config):
@@ -3803,7 +3674,7 @@ def init_baseline_batched(config, baseline_path, batch_size=20):
                     html = fm_get(fetch_product_detail(pid, config), config, "product_html", "")
                 else:
                     html = fm_get(fetch_industry_detail(pid, config), config, "industry_html", "")
-                state[kind_key(kind)][pid] = {"name": name, "category": cat, "fp": text_fp(html)}
+                state[kind_key(kind)][str(pid)] = {"name": name, "category": cat, "fp": text_fp(html)}
                 ckpt["done_ids"].append(pid)
             except Exception as e:
                 print(f"    ⚠️ {name} ({pid}): {e}")
@@ -3988,8 +3859,7 @@ def main(argv=None):
         qb_path = str(state_file(run_site_id, "_quality_baseline.json"))
         qb = generate_quality_baseline(config["output_root"], config)
         os.makedirs(os.path.dirname(qb_path), exist_ok=True)
-        with open(qb_path, "w", encoding="utf-8") as f:
-            json.dump(qb, f, ensure_ascii=False, indent=2)
+        _save_json_state(qb, qb_path)
         print(f"✅ 质量基线已生成: {qb_path} ({len(qb['items'])} 项)")
         return 0 if qb["items"] else 1
 
@@ -4020,7 +3890,7 @@ def main(argv=None):
 
     # Read entity types from config (default: product + industry)
     extract_cfg = config.get("extraction", {})
-    entity_types = extract_cfg.get("entity_types", ["product", "industry"])
+    entity_types = normalize_entity_types(extract_cfg.get("entity_types", ["product", "industry"]))
     cat_filter = extract_cfg.get("category_filter", [])  # optional: only extract named categories
 
     out = config["output_root"]
@@ -4028,7 +3898,7 @@ def main(argv=None):
     config["__resource_records"] = []
     prod_dir_name = config["output_structure"]["products_dir"]
     out_struct = config["output_structure"]
-    sol_dir_name = out_struct.get("industries_dir", out_struct["solutions_dir"]) if config.get("page_type") == "industry" else out_struct["solutions_dir"]
+    sol_dir_name = out_struct.get("industries_dir") or out_struct["solutions_dir"]
 
     if args.incremental:
         state = load_baseline(args.baseline)

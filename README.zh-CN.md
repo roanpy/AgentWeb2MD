@@ -56,7 +56,7 @@ Agent 检查网站与提取范围
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -e .
 ```
 
 也可以安装 GitHub Release 附带的 wheel：
@@ -158,6 +158,8 @@ Agent 必须阅读代表性 Markdown 和 `_quality_report.md`。分数通过不�
 ```
 
 默认输出目录为 `/tmp/generic_url_list_sample`。
+
+内置的 `example.com` 页面刻意保持极简，可能低于默认质量阈值。它只用于验证管线可运行；判断提取质量前，请换成有代表性的 URL。
 
 默认从 `./config` 读取站点配置；可通过 `AGENTWEB2MD_CONFIG_DIR` 指定其他可写配置目录。基线和断点状态默认写入 `./.agentweb2md`；可通过 `AGENTWEB2MD_STATE_DIR` 修改位置。
 

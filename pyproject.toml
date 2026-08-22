@@ -50,7 +50,6 @@ py-modules = [
   "init_site",
   "library_docs",
   "quality_report",
-  "resource_utils",
   "resources_output",
   "specs_output",
 ]

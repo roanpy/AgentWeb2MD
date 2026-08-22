@@ -56,7 +56,7 @@ From a source checkout:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -e .
 ```
 
 Or install the wheel attached to a GitHub release:
@@ -158,6 +158,8 @@ Only remove discovery caps or change the output destination after the sample pas
 ```
 
 Output defaults to `/tmp/generic_url_list_sample`.
+
+The bundled `example.com` URL is intentionally tiny and may score below the default quality threshold. It verifies the pipeline; replace it with representative URLs before judging extraction quality.
 
 Site profiles are read from `./config` by default; set `AGENTWEB2MD_CONFIG_DIR` to use another writable profile directory. Baselines and checkpoints are stored under `./.agentweb2md`; set `AGENTWEB2MD_STATE_DIR` to move that local state.
 

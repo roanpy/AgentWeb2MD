@@ -32,15 +32,11 @@ WORKDIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, WORKDIR)
 
 from config_schema import (
-    CONFIG_SCHEMA_V1,
     PRESETS,
-    _schema_keys_at,
-    _list_keys_at,
-    _required_keys_at,
     _field_schema,
-    _check_type,
     SCHEMA_VERSION,
-    validate_runtime_constraints,
+    normalize_entity_types,
+    validate_config_schema,
 )
 
 # ─── Lazy imports for probe phase (may not be needed in --non-interactive) ──
@@ -309,14 +305,18 @@ def _infer_url_patterns(probe: dict) -> dict:
                 pattern = "/" + "/".join(parts[:match_idx + 1]) + "/"
                 if url_type == "product":
                     patterns["product_pattern"] = pattern
-                elif url_type == "industry":
+                elif url_type in {"industry", "solution"} and (
+                    url_type == "industry" or not probe["sample_urls"].get("industry")
+                ):
                     patterns["industry_pattern"] = pattern
             elif len(parts) >= 2:
                 # Fallback: use second segment
                 segment = "/" + parts[1] + "/"
                 if url_type == "product":
                     patterns["product_pattern"] = segment
-                elif url_type == "industry":
+                elif url_type in {"industry", "solution"} and (
+                    url_type == "industry" or not probe["sample_urls"].get("industry")
+                ):
                     patterns["industry_pattern"] = segment
             break
     return patterns
@@ -403,79 +403,7 @@ def _generate_page_type_config(page_type: str, extra_overrides: dict | None = No
 # ─── VALIDATE: check against CONFIG_SCHEMA_V1 ──────────────────────
 
 def _validate_config(config: dict) -> tuple[list, list]:
-    """Validate config dict against CONFIG_SCHEMA_V1. Returns (errors, warnings)."""
-    errors = []
-    warnings = []
-    schema_props = CONFIG_SCHEMA_V1["properties"]
-
-    # Top-level required
-    for key in _required_keys_at(""):
-        val = config.get(key)
-        if val is None or val == "":
-            errors.append(f"'{key}' is required but missing or empty")
-
-    # Unknown top-level keys
-    valid_top = _schema_keys_at("")
-    for key in config:
-        if key.startswith("__"):
-            continue
-        if key not in valid_top:
-            warnings.append(f"Unknown key '{key}' (not in schema v{SCHEMA_VERSION})")
-
-    # Type checks and nested validation
-    for key, value in config.items():
-        if key.startswith("__"):
-            continue
-        field = schema_props.get(key, {})
-        expected = field.get("type")
-        if expected and value is not None and not _check_type(value, expected):
-            errors.append(f"'{key}' expected type {expected}, got {type(value).__name__}")
-            continue
-        if not isinstance(value, dict):
-            continue
-        if "properties" in field:
-            sub_e, sub_w = _validate_nested(value, field["properties"], f"{key}.")
-            errors.extend(sub_e)
-            warnings.extend(sub_w)
-
-    # List keys
-    for key in _list_keys_at(""):
-        val = config.get(key)
-        if val is not None and not isinstance(val, list):
-            errors.append(f"'{key}' must be a list, got {type(val).__name__}")
-
-    errors.extend(validate_runtime_constraints(config))
-    return errors, warnings
-
-
-def _validate_nested(obj: dict, props: dict, prefix: str) -> tuple[list, list]:
-    errors = []
-    warnings = []
-
-    # Required in this section
-    for key, field in props.items():
-        if field.get("required") and key not in obj:
-            errors.append(f"'{prefix}{key}' is required but missing")
-
-    # Unknown keys
-    for key in obj:
-        if key not in props:
-            warnings.append(f"Unknown key '{prefix}{key}'")
-            continue
-        field = props[key]
-        val = obj[key]
-        expected = field.get("type")
-        if expected and val is not None:
-            if not _check_type(val, expected):
-                errors.append(f"'{prefix}{key}' expected type {expected}, got {type(val).__name__}")
-
-        # Recurse
-        if isinstance(val, dict) and "properties" in field:
-            sub_e, sub_w = _validate_nested(val, field["properties"], f"{prefix}{key}.")
-            errors.extend(sub_e)
-            warnings.extend(sub_w)
-
-    return errors, warnings
+    return validate_config_schema(config)
 
 
 # ─── WRITE: output config files ────────────────────────────────────
@@ -690,9 +618,12 @@ def main():
         category_filter=category_filter,
     )
 
-    entity_types = common.get("extraction", {}).get("entity_types", ["product", "industry"])
-    if probe["sample_urls"]["solution"] and "solution" not in entity_types:
-        entity_types.append("solution")
+    entity_types = normalize_entity_types(
+        common.get("extraction", {}).get("entity_types", ["product", "industry"])
+    )
+    if probe["sample_urls"]["solution"] and "industry" not in entity_types:
+        entity_types.append("industry")
+    common.setdefault("extraction", {})["entity_types"] = entity_types
 
     page_type_configs = {}
     for pt in entity_types:

@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
   "beautifulsoup4==4.15.0",
-  "markdownify==1.2.2",
+  "markdownify==1.2.3",
   "requests==2.34.2",
 ]
 

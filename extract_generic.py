@@ -3267,6 +3267,7 @@ def extract_industry(iid, name, config, save_dir=None):
 
 def download_resource(url, save_dir, name, config, current_name=""):
     if not url: return ""
+    page_dir = os.path.dirname(save_dir)
     base = config["base_url"]
     if url.startswith("/"): url = base + url
     elif not url.startswith("http"): url = base + "/" + url
@@ -3324,7 +3325,7 @@ def download_resource(url, save_dir, name, config, current_name=""):
         os.makedirs(save_dir, exist_ok=True)
         with open(local, "wb") as f: f.write(content)
         if "__resource_records" in config:
-            record_resource(config["__resource_records"], config["output_root"], save_dir, current_name or name, current_name or name, "download", filename, rel, ext, len(content), url)
+            record_resource(config["__resource_records"], config["output_root"], page_dir, current_name or name, current_name or name, "download", filename, rel, ext, len(content), url)
         return rel
     except Exception:
         return ""

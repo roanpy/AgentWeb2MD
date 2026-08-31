@@ -13,6 +13,7 @@ from extract_generic import (
     collect_all_items,
     convert_html_to_md,
     download_image,
+    download_resource,
     detect_changes,
     load_config,
     load_baseline,
@@ -23,6 +24,7 @@ from extract_generic import (
 )
 from agentweb2md_paths import validate_site_id
 from config_schema import normalize_entity_types
+from discovery_controls import apply_discovery_controls
 from http_utils import ResponseTooLarge
 from init_site import _infer_url_patterns
 from library_docs import write_standard_docs
@@ -36,6 +38,33 @@ def test_public_configs_validate():
     config = load_config(str(ROOT / "config" / "generic" / "common.json"), page_type="product")
     errors, _warnings = validate_config(config)
     assert errors == []
+
+
+def test_discovery_controls_apply_exclusions_before_limit():
+    items = [("product", "https://example.com/keep", "Keep", "Pages"), ("product", "https://example.com/private", "Private", "Pages")]
+    assert apply_discovery_controls(items, {"url_exclude_patterns": ["private"], "max_pages": 1}) == [items[0]]
+
+
+def test_resource_sidecar_points_to_page_not_resource_directory(tmp_path, monkeypatch):
+    class Response:
+        content = b"x" * 2048
+        headers = {"content-disposition": 'attachment; filename="guide.pdf"'}
+        url = "https://example.com/guide.pdf"
+        status_code = 200
+
+    monkeypatch.setattr("extract_generic._retry_get", lambda *_args, **_kwargs: Response())
+    page_dir = tmp_path / "pages" / "Demo"
+    config = {
+        "base_url": "https://example.com",
+        "output_root": str(tmp_path),
+        "output_structure": {"resource_subdir": "resources"},
+        "filters": {},
+        "__resource_records": [],
+    }
+
+    download_resource("https://example.com/guide.pdf", str(page_dir / "resources"), "Guide", config, "Demo")
+
+    assert config["__resource_records"][0].rel_path == "pages/Demo"
 
 
 def test_generic_conversion_removes_page_chrome():
